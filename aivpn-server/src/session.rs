@@ -335,6 +335,27 @@ impl SessionManager {
         eph_pub: [u8; X25519_PUBLIC_KEY_SIZE],
         preshared_key: Option<[u8; 32]>,
     ) -> Result<Arc<Mutex<Session>>> {
+        // The current Android client configures a stable tunnel IP locally.
+        // When the same public client IP reconnects, reuse its prior VPN IP.
+        let same_ip_sessions: Vec<([u8; 16], Option<Ipv4Addr>)> = self.sessions.iter()
+            .filter_map(|entry| {
+                let session = entry.value().lock();
+                if session.client_addr.ip() == client_addr.ip() {
+                    Some((*entry.key(), session.vpn_ip))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let reused_vpn_ip = if same_ip_sessions.len() == 1 {
+            let (old_session_id, vpn_ip) = same_ip_sessions[0];
+            self.remove_session(&old_session_id);
+            vpn_ip
+        } else {
+            None
+        };
+
         if self.sessions.len() >= MAX_SESSIONS {
             return Err(Error::Session("Max sessions reached".into()));
         }
@@ -415,9 +436,16 @@ impl SessionManager {
         self.sessions.insert(session_id, session.clone());
         
         // Assign VPN IP and register mapping
-        let octet = self.next_ip_octet.fetch_add(1, Ordering::Relaxed);
-        if octet <= 254 {
-            let vpn_ip = Ipv4Addr::new(10, 0, 0, octet as u8);
+        let vpn_ip = reused_vpn_ip.or_else(|| {
+            let octet = self.next_ip_octet.fetch_add(1, Ordering::Relaxed);
+            if octet <= 254 {
+                Some(Ipv4Addr::new(10, 0, 0, octet as u8))
+            } else {
+                None
+            }
+        });
+
+        if let Some(vpn_ip) = vpn_ip {
             session.lock().vpn_ip = Some(vpn_ip);
             self.vpn_ip_map.insert(vpn_ip, session_id);
             info!("Assigned VPN IP {} to session", vpn_ip);

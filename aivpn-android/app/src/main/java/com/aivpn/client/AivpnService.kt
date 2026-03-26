@@ -40,6 +40,8 @@ class AivpnService : VpnService() {
     private var serviceJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var udpSocket: DatagramSocket? = null
+    @Volatile private var connectionGeneration: Long = 0
+    @Volatile private var manualDisconnect = false
 
     // Traffic counters
     @Volatile private var totalUploadBytes: Long = 0
@@ -60,6 +62,13 @@ class AivpnService : VpnService() {
     }
 
     private fun startVpn(serverAddr: String, serverKeyBase64: String) {
+        connectionGeneration += 1
+        val generation = connectionGeneration
+        manualDisconnect = false
+
+        serviceJob?.cancel()
+        cleanup()
+
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_connecting)))
 
@@ -158,6 +167,13 @@ class AivpnService : VpnService() {
                 statusCallback?.invoke(false, getString(R.string.status_error, e.message ?: "unknown"))
             } finally {
                 cleanup()
+                if (serviceJob == coroutineContext[Job]) {
+                    serviceJob = null
+                }
+                if (connectionGeneration == generation && !manualDisconnect) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
         }
     }
@@ -237,7 +253,10 @@ class AivpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        manualDisconnect = true
+        connectionGeneration += 1
         serviceJob?.cancel()
+        serviceJob = null
         cleanup()
         statusCallback?.invoke(false, getString(R.string.status_disconnected))
         stopForeground(STOP_FOREGROUND_REMOVE)
