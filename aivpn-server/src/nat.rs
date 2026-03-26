@@ -13,6 +13,8 @@ use tracing::{info, warn, debug, error};
 
 use aivpn_common::error::{Error, Result};
 
+const TUN_MTU: u16 = 1200;
+
 /// NAT Forwarder for routing traffic to internet
 /// Uses split reader/writer to avoid mutex starvation
 pub struct NatForwarder {
@@ -42,7 +44,7 @@ impl NatForwarder {
             .name(&self.tun_name)
             .address(&self.tun_addr)
             .netmask(&self.tun_netmask)
-            .mtu(1280)
+            .mtu(TUN_MTU)
             .up();
         
         #[cfg(target_os = "linux")]

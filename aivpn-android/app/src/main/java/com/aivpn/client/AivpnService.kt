@@ -29,6 +29,7 @@ class AivpnService : VpnService() {
         const val ACTION_DISCONNECT = "com.aivpn.DISCONNECT"
         private const val CHANNEL_ID = "aivpn_vpn"
         private const val NOTIFICATION_ID = 1
+        private const val TUN_MTU = 1200
 
         // Callback to update the UI from the service
         var statusCallback: ((connected: Boolean, status: String) -> Unit)? = null
@@ -122,7 +123,7 @@ class AivpnService : VpnService() {
                     .addRoute("0.0.0.0", 0)
                     .addDnsServer("8.8.8.8")
                     .addDnsServer("1.1.1.1")
-                    .setMtu(1280)
+                    .setMtu(TUN_MTU)
                     .setBlocking(true)
 
                 vpnInterface = builder.establish()
