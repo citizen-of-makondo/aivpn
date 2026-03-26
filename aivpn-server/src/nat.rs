@@ -148,6 +148,32 @@ impl NatForwarder {
                 "-j", "ACCEPT",
             ])
             .output();
+
+        // Clamp TCP MSS across the TUN boundary to avoid PMTU blackholes
+        // on download-heavy flows when the VPN MTU is lower than the uplink MTU.
+        let _ = Command::new("iptables")
+            .args([
+                "-t", "mangle",
+                "-A", "FORWARD",
+                "-o", &self.tun_name,
+                "-p", "tcp",
+                "--tcp-flags", "SYN,RST", "SYN",
+                "-j", "TCPMSS",
+                "--clamp-mss-to-pmtu",
+            ])
+            .output();
+
+        let _ = Command::new("iptables")
+            .args([
+                "-t", "mangle",
+                "-A", "FORWARD",
+                "-i", &self.tun_name,
+                "-p", "tcp",
+                "--tcp-flags", "SYN,RST", "SYN",
+                "-j", "TCPMSS",
+                "--clamp-mss-to-pmtu",
+            ])
+            .output();
         
         Ok(())
     }
@@ -201,6 +227,30 @@ impl Drop for NatForwarder {
                     "-D", "POSTROUTING",
                     "-s", &format!("{}/24", self.tun_addr),
                     "-j", "MASQUERADE",
+                ])
+                .output();
+
+            let _ = Command::new("iptables")
+                .args([
+                    "-t", "mangle",
+                    "-D", "FORWARD",
+                    "-o", &self.tun_name,
+                    "-p", "tcp",
+                    "--tcp-flags", "SYN,RST", "SYN",
+                    "-j", "TCPMSS",
+                    "--clamp-mss-to-pmtu",
+                ])
+                .output();
+
+            let _ = Command::new("iptables")
+                .args([
+                    "-t", "mangle",
+                    "-D", "FORWARD",
+                    "-i", &self.tun_name,
+                    "-p", "tcp",
+                    "--tcp-flags", "SYN,RST", "SYN",
+                    "-j", "TCPMSS",
+                    "--clamp-mss-to-pmtu",
                 ])
                 .output();
         }
