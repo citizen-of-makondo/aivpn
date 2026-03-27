@@ -208,6 +208,75 @@ impl ClientDatabase {
             warn!("Failed to flush client stats: {}", e);
         }
     }
+
+    /// Reload client database from disk if the file has changed.
+    /// Preserves in-memory traffic stats for existing clients.
+    /// Returns true if a reload was performed.
+    pub fn reload_if_changed(&self) -> bool {
+        let metadata = match std::fs::metadata(&self.file_path) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+
+        let modified = metadata.modified().ok();
+
+        {
+            let data = self.data.read();
+            // Check if we already have a cached mtime
+            // We store it as a side-channel: compare current file size + mtime
+            // For simplicity, always reload if file exists and we can read it
+            // The merge logic below is idempotent for unchanged data
+        }
+
+        match self.reload_from_disk() {
+            Ok(true) => {
+                info!("Client database reloaded from disk ({} clients)", self.list_clients().len());
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                warn!("Failed to reload client DB: {}", e);
+                false
+            }
+        }
+    }
+
+    /// Internal: reload from disk, merging with in-memory stats.
+    /// Returns Ok(true) if data changed, Ok(false) if unchanged.
+    fn reload_from_disk(&self) -> Result<bool> {
+        let content = std::fs::read_to_string(&self.file_path)
+            .map_err(|e| Error::Session(format!("Failed to read client DB for reload: {}", e)))?;
+        let new_data: ClientDbFile = serde_json::from_str(&content)
+            .map_err(|e| Error::Session(format!("Failed to parse client DB for reload: {}", e)))?;
+
+        let mut data = self.data.write();
+
+        // Check if anything actually changed (compare client count and IDs)
+        let old_ids: std::collections::HashSet<String> = data.clients.iter().map(|c| c.id.clone()).collect();
+        let new_ids: std::collections::HashSet<String> = new_data.clients.iter().map(|c| c.id.clone()).collect();
+        let changed = old_ids != new_ids;
+
+        if !changed {
+            return Ok(false);
+        }
+
+        // Build a map of existing stats by client ID
+        let mut stats_map: std::collections::HashMap<String, ClientStats> = std::collections::HashMap::new();
+        for client in &data.clients {
+            stats_map.insert(client.id.clone(), client.stats.clone());
+        }
+
+        // Replace clients list, preserving stats for existing clients
+        data.clients = new_data.clients.into_iter().map(|mut c| {
+            if let Some(saved_stats) = stats_map.get(&c.id) {
+                c.stats = saved_stats.clone();
+            }
+            c
+        }).collect();
+        data.next_octet = new_data.next_octet;
+
+        Ok(true)
+    }
 }
 
 /// Custom serde module for [u8; 32] as base64

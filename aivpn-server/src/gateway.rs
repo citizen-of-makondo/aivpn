@@ -283,6 +283,18 @@ impl Gateway {
             info!("Client stats flush task spawned (300s interval)");
         }
         
+        // Spawn client DB hot-reload task (pick up new clients without restart)
+        if let Some(ref db) = self.client_db {
+            let db = db.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    db.reload_if_changed();
+                }
+            });
+            info!("Client DB hot-reload task spawned (10s interval)");
+        }
+        
         // Start packet processing
         self.process_packets().await?;
         
