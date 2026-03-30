@@ -112,6 +112,11 @@ class VPNManager: ObservableObject {
         KeychainStorage.shared.updateKeyName(id: id, newName: newName)
     }
     
+    /// Обновить ключ полностью
+    func updateKey(id: String, name: String, keyValue: String) -> Bool {
+        return KeychainStorage.shared.updateKey(id: id, name: name, keyValue: keyValue)
+    }
+
     /// Получить выбранный ключ
     var selectedKey: ConnectionKey? {
         return KeychainStorage.shared.selectedKey

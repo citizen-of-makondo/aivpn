@@ -107,6 +107,27 @@ class KeychainStorage: ObservableObject {
             saveKeys()
         }
     }
+
+    /// Обновить ключ полностью (имя + keyValue)
+    func updateKey(id: String, name: String, keyValue: String) -> Bool {
+        guard let index = keys.firstIndex(where: { $0.id == id }) else {
+            return false
+        }
+        
+        let normalizedKey = keyValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "aivpn://", with: "")
+        
+        // Проверить дубликат (если ключ меняем на другой существующий)
+        if normalizedKey != keys[index].keyValue &&
+           keys.contains(where: { $0.id != id && $0.keyValue == normalizedKey }) {
+            return false
+        }
+        
+        // Создать новый struct с обновлёнными данными
+        keys[index] = ConnectionKey(id: id, name: name, keyValue: keyValue)
+        saveKeys()
+        return true
+    }
     
     /// Удалить ключ
     func deleteKey(id: String) {

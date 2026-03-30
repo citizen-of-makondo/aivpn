@@ -151,7 +151,7 @@ struct ContentView: View {
                                     onEdit: {
                                         editingKeyId = key.id
                                         editingKeyName = key.name
-                                        connectionKey = ""
+                                        connectionKey = key.keyValue  // Показать текущий ключ
                                         withAnimation {
                                             showKeyInput = true
                                         }
@@ -202,20 +202,37 @@ struct ContentView: View {
                                 showKeyInput = false
                                 keyName = ""
                                 connectionKey = ""
+                                editingKeyId = nil
                             }
                         }
                         .buttonStyle(.bordered)
                         
                         Button(loc.t("save_key")) {
                             let name = keyName.isEmpty ? "Key \(vpn.keys.count + 1)" : keyName
-                            if vpn.addKey(name: name, keyValue: connectionKey) {
-                                withAnimation {
-                                    showKeyInput = false
-                                    keyName = ""
-                                    connectionKey = ""
+                            
+                            if let editId = editingKeyId {
+                                // Editing existing key - update both name and key value
+                                if vpn.updateKey(id: editId, name: name, keyValue: connectionKey) {
+                                    withAnimation {
+                                        showKeyInput = false
+                                        keyName = ""
+                                        connectionKey = ""
+                                        editingKeyId = nil
+                                    }
+                                } else {
+                                    vpn.lastError = loc.t("duplicate_key")
                                 }
                             } else {
-                                vpn.lastError = loc.t("duplicate_key")
+                                // Adding new key
+                                if vpn.addKey(name: name, keyValue: connectionKey) {
+                                    withAnimation {
+                                        showKeyInput = false
+                                        keyName = ""
+                                        connectionKey = ""
+                                    }
+                                } else {
+                                    vpn.lastError = loc.t("duplicate_key")
+                                }
                             }
                         }
                         .buttonStyle(.borderedProminent)
