@@ -23,6 +23,10 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     iproute2 \
     iptables \
+    iputils-ping \
+    curl \
+    netcat-openbsd \
+    bc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

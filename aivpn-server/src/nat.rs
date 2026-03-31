@@ -13,7 +13,7 @@ use tracing::{info, warn, debug, error};
 
 use aivpn_common::error::{Error, Result};
 
-const TUN_MTU: u16 = 1200;
+const TUN_MTU: u16 = 1420;
 
 /// NAT Forwarder for routing traffic to internet
 /// Uses split reader/writer to avoid mutex starvation

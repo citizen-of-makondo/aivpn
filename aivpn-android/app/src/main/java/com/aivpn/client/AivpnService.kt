@@ -29,7 +29,7 @@ class AivpnService : VpnService() {
         const val ACTION_DISCONNECT = "com.aivpn.DISCONNECT"
         private const val CHANNEL_ID = "aivpn_vpn"
         private const val NOTIFICATION_ID = 1
-        private const val TUN_MTU = 1200
+        private const val TUN_MTU = 1420
 
         // Callback to update the UI from the service
         var statusCallback: ((connected: Boolean, status: String) -> Unit)? = null
@@ -222,7 +222,7 @@ class AivpnService : VpnService() {
         socket: DatagramSocket,
         crypto: AivpnCrypto
     ) = withContext(Dispatchers.IO) {
-        val buf = ByteArray(1500)
+        val buf = ByteArray(TUN_MTU + 100) // Extra space for IP headers
         while (isActive) {
             try {
                 val n = tunIn.read(buf)
@@ -248,7 +248,7 @@ class AivpnService : VpnService() {
         tunOut: FileOutputStream,
         crypto: AivpnCrypto
     ) = withContext(Dispatchers.IO) {
-        val buf = ByteArray(2048)
+        val buf = ByteArray(TUN_MTU + 200) // Extra space for VPN overhead
         while (isActive) {
             try {
                 val pkt = DatagramPacket(buf, buf.size)
@@ -257,7 +257,8 @@ class AivpnService : VpnService() {
                 val decrypted = crypto.decryptDataPacket(data)
                 if (decrypted != null && decrypted.isNotEmpty()) {
                     tunOut.write(decrypted)
-                    tunOut.flush()
+                    // flush() removed — FileOutputStream auto-flushes on write
+                    // and explicit flush causes unnecessary syscalls
                     totalDownloadBytes += decrypted.size
                     trafficCallback?.invoke(totalUploadBytes, totalDownloadBytes)
                 }

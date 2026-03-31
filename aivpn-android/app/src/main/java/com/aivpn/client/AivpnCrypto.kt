@@ -104,7 +104,7 @@ class AivpnCrypto(private val serverStaticPub: ByteArray, private val psk: ByteA
             // Validate tag (try range of counters)
             val tag = packet.copyOfRange(0, TAG_SIZE)
             var validCounter: Long? = null
-            val timeWindow = System.currentTimeMillis() / 5_000L
+            val timeWindow = System.currentTimeMillis() / 10_000L  // Optimized: 10s window (was 5s)
 
             for (offset in longArrayOf(0, -1, 1)) {
                 val tw = timeWindow + offset
@@ -180,7 +180,7 @@ class AivpnCrypto(private val serverStaticPub: ByteArray, private val psk: ByteA
         // Validate tag
         val tag = packet.copyOfRange(0, TAG_SIZE)
         var validCounter: Long? = null
-        val timeWindow = System.currentTimeMillis() / 5_000L
+        val timeWindow = System.currentTimeMillis() / 10_000L  // Optimized: 10s window (was 5s)
 
         for (offset in longArrayOf(0, -1, 1)) {
             val tw = timeWindow + offset
@@ -240,7 +240,7 @@ class AivpnCrypto(private val serverStaticPub: ByteArray, private val psk: ByteA
         val ciphertext = encrypt(sessionKey, nonce, paddedBytes)
 
         // Generate resonance tag
-        val timeWindow = System.currentTimeMillis() / 5_000L
+        val timeWindow = System.currentTimeMillis() / 10_000L  // Optimized: 10s window (was 5s)
         val tag = generateTag(tagSecret, counter, timeWindow)
 
         // MDH (4 zero bytes for MVP)

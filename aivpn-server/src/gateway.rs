@@ -134,7 +134,7 @@ pub struct Gateway {
     config: GatewayConfig,
     session_manager: Arc<SessionManager>,
     udp_socket: Option<Arc<UdpSocket>>,
-    nat_forwarder: Option<NatForwarder>,
+    nat_forwarder: Option<Arc<NatForwarder>>,
     /// Per-IP rate limiter: (packet_count, window_start)
     rate_limits: DashMap<IpAddr, (u64, Instant)>,
     /// Neural Resonance Module (Patent 1) — periodic traffic validation
@@ -217,7 +217,7 @@ impl Gateway {
                 &self.config.tun_netmask,
             )?;
             nat.create()?;
-            self.nat_forwarder = Some(nat);
+            self.nat_forwarder = Some(Arc::new(nat));
             info!("TUN device: {} ({}/{})", 
                 self.config.tun_name,
                 self.config.tun_addr,
@@ -251,9 +251,23 @@ impl Gateway {
                 let sessions = self.session_manager.clone();
                 let socket = self.udp_socket.as_ref().unwrap().clone();
                 let mask = aivpn_common::mask::preset_masks::webrtc_zoom_v3();
+                let tun_addr = self.config.tun_addr.clone();
+                
+                // Channel for ICMP replies to be written to TUN
+                let (icmp_tx, mut icmp_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+                
+                // Spawn ICMP writer task
+                let nat_for_icmp = nat.clone();
+                tokio::spawn(async move {
+                    while let Some(reply) = icmp_rx.recv().await {
+                        if let Err(e) = nat_for_icmp.forward_packet(&reply).await {
+                            debug!("ICMP reply write error: {}", e);
+                        }
+                    }
+                });
                 
                 tokio::spawn(async move {
-                    Self::tun_read_loop(tun_reader, sessions, socket, mask).await;
+                    Self::tun_read_loop(tun_reader, icmp_tx, sessions, socket, mask, tun_addr).await;
                 });
                 info!("TUN read loop spawned");
             }
@@ -408,12 +422,15 @@ impl Gateway {
     /// TUN read loop: reads packets from TUN device and routes them back to clients
     async fn tun_read_loop(
         mut tun_reader: tun::DeviceReader,
+        tun_writer: tokio::sync::mpsc::Sender<Vec<u8>>,
         sessions: Arc<SessionManager>,
         socket: Arc<UdpSocket>,
         mask: MaskProfile,
+        tun_addr: String,
     ) {
         use aivpn_common::crypto::POLY1305_TAG_SIZE;
         let mut buf = vec![0u8; MAX_PACKET_SIZE];
+        let server_ip: Ipv4Addr = tun_addr.parse().unwrap_or(Ipv4Addr::new(10, 0, 0, 1));
         
         loop {
             match tun_reader.read(&mut buf).await {
@@ -427,6 +444,15 @@ impl Gateway {
                     }
                     let dst_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
                     
+                    // Handle ICMP echo request to server's own IP (ping to gateway)
+                    if dst_ip == server_ip && packet.len() >= 28 && packet[9] == 1 {
+                        // ICMP packet to server — generate echo reply
+                        if let Some(reply) = Self::build_icmp_echo_reply(packet, &server_ip) {
+                            let _ = tun_writer.send(reply).await;
+                        }
+                        continue;
+                    }
+                    
                     // Find session by VPN IP
                     let session = match sessions.get_session_by_vpn_ip(&dst_ip) {
                         Some(s) => s,
@@ -437,14 +463,20 @@ impl Gateway {
                     };
                     
                     // Build encrypted response packet
-                    let (client_addr, aivpn_packet) = {
+                    // Minimize lock duration: extract only what we need under lock, then encrypt outside
+                    let (client_addr, nonce, tag, mdh, ciphertext) = {
                         let mut sess = session.lock();
                         let client_addr = sess.client_addr;
+                        let seq_num = sess.next_seq() as u16;
+                        let (nonce, counter) = sess.next_send_nonce();
+                        let key = sess.keys.session_key.clone();
+                        let tag_secret = sess.keys.tag_secret;
+                        drop(sess); // Release lock BEFORE expensive encryption
                         
                         // Build inner payload: Data type + IP packet
                         let inner_header = InnerHeader {
                             inner_type: InnerType::Data,
-                            seq_num: sess.next_seq() as u16,
+                            seq_num,
                         };
                         let mut inner_payload = inner_header.encode().to_vec();
                         inner_payload.extend_from_slice(packet);
@@ -452,16 +484,13 @@ impl Gateway {
                         // Build MDH (no eph_pub for data packets)
                         let mdh = mask.header_template.clone();
                         
-                        // Pad and encrypt
+                        // Pad and encrypt (outside lock)
                         let pad_len: u16 = 0;
                         let mut padded = Vec::with_capacity(2 + inner_payload.len());
                         padded.extend_from_slice(&pad_len.to_le_bytes());
                         padded.extend_from_slice(&inner_payload);
                         
-                        let (nonce, counter) = sess.next_send_nonce();
-                        info!("TUN→client: counter={}, is_ratcheted={}, dst_ip={}", counter, sess.is_ratcheted, dst_ip);
-                        let key = &sess.keys.session_key;
-                        let ciphertext = match encrypt_payload(key, &nonce, &padded) {
+                        let ciphertext = match encrypt_payload(&key, &nonce, &padded) {
                             Ok(ct) => ct,
                             Err(e) => {
                                 debug!("TUN: encrypt error: {}", e);
@@ -469,25 +498,25 @@ impl Gateway {
                             }
                         };
                         
-                        // Generate tag
+                        // Generate tag (outside lock)
                         let time_window = crypto::compute_time_window(
                             crypto::current_timestamp_ms(),
                             aivpn_common::crypto::DEFAULT_WINDOW_MS,
                         );
                         let tag = crypto::generate_resonance_tag(
-                            &sess.keys.tag_secret,
+                            &tag_secret,
                             counter,
                             time_window,
                         );
                         
-                        // Assemble: TAG | MDH | ciphertext
-                        let mut aivpn_packet = Vec::with_capacity(TAG_SIZE + mdh.len() + ciphertext.len());
-                        aivpn_packet.extend_from_slice(&tag);
-                        aivpn_packet.extend_from_slice(&mdh);
-                        aivpn_packet.extend_from_slice(&ciphertext);
-                        
-                        (client_addr, aivpn_packet)
+                        (client_addr, nonce, tag, mdh, ciphertext)
                     };
+                    
+                    // Assemble: TAG | MDH | ciphertext
+                    let mut aivpn_packet = Vec::with_capacity(TAG_SIZE + mdh.len() + ciphertext.len());
+                    aivpn_packet.extend_from_slice(&tag);
+                    aivpn_packet.extend_from_slice(&mdh);
+                    aivpn_packet.extend_from_slice(&ciphertext);
                     
                     // Send to client
                     if let Err(e) = socket.send_to(&aivpn_packet, client_addr).await {
@@ -500,6 +529,78 @@ impl Gateway {
                 }
             }
         }
+    }
+    
+    /// Build ICMP Echo Reply from Echo Request
+    fn build_icmp_echo_reply(request: &[u8], server_ip: &Ipv4Addr) -> Option<Vec<u8>> {
+        if request.len() < 28 {
+            return None;
+        }
+        
+        // Parse source IP
+        let src_ip = Ipv4Addr::new(request[12], request[13], request[14], request[15]);
+        
+        // Parse ICMP type and code
+        let icmp_type = request[20];
+        if icmp_type != 8 {
+            return None; // Not echo request
+        }
+        
+        // Build reply: swap src/dst IP, change ICMP type to 0 (echo reply)
+        let mut reply = Vec::with_capacity(request.len());
+        
+        // IP header
+        reply.push(0x45); // Version 4, IHL 5
+        reply.push(0x00); // DSCP/ECN
+        let total_len = (request.len() as u16).to_be_bytes();
+        reply.extend_from_slice(&total_len);
+        reply.extend_from_slice(&request[4..6]); // Identification
+        reply.extend_from_slice(&request[6..8]); // Flags/Fragment
+        reply.push(64); // TTL
+        reply.push(1);  // Protocol: ICMP
+        reply.push(0);  // Header checksum (will be computed by kernel)
+        reply.push(0);
+        reply.extend_from_slice(&server_ip.octets()); // Source IP (server)
+        reply.extend_from_slice(&src_ip.octets());    // Dest IP (client)
+        
+        // ICMP header
+        reply.push(0);  // Type: Echo Reply
+        reply.push(request[21]); // Code
+        reply.push(0);  // Checksum placeholder
+        reply.push(0);
+        reply.extend_from_slice(&request[24..28]); // ID + Sequence
+        reply.extend_from_slice(&request[28..]);   // Data
+        
+        // Compute ICMP checksum
+        let checksum = Self::compute_checksum(&reply[20..]);
+        reply[22] = (checksum >> 8) as u8;
+        reply[23] = (checksum & 0xFF) as u8;
+        
+        Some(reply)
+    }
+    
+    /// Compute Internet checksum (RFC 1071)
+    fn compute_checksum(data: &[u8]) -> u16 {
+        let mut sum: u32 = 0;
+        let mut i = 0;
+        
+        // Process 16-bit words
+        while i + 1 < data.len() {
+            sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
+            i += 2;
+        }
+        
+        // Add remaining byte
+        if i < data.len() {
+            sum += (data[i] as u32) << 8;
+        }
+        
+        // Fold 32-bit sum to 16 bits
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        
+        !sum as u16
     }
     
     /// Main packet processing loop

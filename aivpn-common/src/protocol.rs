@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::crypto::{POLY1305_TAG_SIZE, TAG_SIZE};
 use crate::error::{Error, Result};
 
-/// Maximum UDP packet size (IPv6 minimum MTU)
-pub const MAX_PACKET_SIZE: usize = 1280;
+/// Maximum UDP packet size (optimized for VPN MTU 1420 + overhead)
+pub const MAX_PACKET_SIZE: usize = 1500;
 
 /// Minimum header overhead (tag + pad_len + inner_header + poly1305)
 pub const MIN_HEADER_OVERHEAD: usize = TAG_SIZE + 2 + 4 + POLY1305_TAG_SIZE;

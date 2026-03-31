@@ -168,7 +168,7 @@ async fn main() {
                 tun_name: tun_name.clone(),
                 tun_addr: tun_addr.clone(),
                 tun_netmask: "255.255.255.0".to_string(),
-                mtu: 1280,
+                mtu: 1420,
                 full_tunnel,
             },
         };

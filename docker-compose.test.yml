@@ -1,0 +1,58 @@
+# Docker Compose для тестирования AIVPN (сервер + клиент в одной bridge-сети)
+version: "3.8"
+
+services:
+  aivpn-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aivpn-test-server
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /run:mode=1777,size=64M
+      - /tmp:mode=1777,size=128M
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    volumes:
+      - ./config:/etc/aivpn
+    networks:
+      aivpn-test:
+        aliases:
+          - aivpn-server
+    healthcheck:
+      test: ["CMD-SHELL", "ss -uulpn | grep 443 || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+  aivpn-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: aivpn-test-client
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /run:mode=1777,size=64M
+      - /tmp:mode=1777,size=128M
+    environment:
+      - RUST_LOG=info
+    depends_on:
+      aivpn-server:
+        condition: service_healthy
+    networks:
+      - aivpn-test
+    # Ключ будет передан через environment или command
+
+networks:
+  aivpn-test:
+    driver: bridge

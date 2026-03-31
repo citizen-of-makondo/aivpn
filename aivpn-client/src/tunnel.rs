@@ -27,7 +27,7 @@ impl Default for TunnelConfig {
             tun_name: format!("tun{:04x}", rand::thread_rng().gen::<u16>()),
             tun_addr: "10.0.0.1".to_string(),
             tun_netmask: "255.255.255.0".to_string(),
-            mtu: 1280,
+            mtu: 1420,
             full_tunnel: false,
         }
     }
