@@ -101,13 +101,24 @@ class MainActivity : AppCompatActivity() {
                 binding.textDownload.text = formatBytes(downloadBytes)
             }
         }
+
+        // Restore UI state if service is already running (e.g. after returning from
+        // VPN permission dialog or screen rotation)
+        if (AivpnService.isRunning) {
+            isConnected = true
+            updateUI(true, AivpnService.lastStatusText)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        // Unregister callbacks when activity is no longer in foreground
-        AivpnService.statusCallback = null
-        AivpnService.trafficCallback = null
+        // Unregister callbacks when activity is no longer in foreground.
+        // Only nullify if activity is actually finishing (not just pausing for
+        // VPN permission dialog, multi-window, etc.)
+        if (isFinishing) {
+            AivpnService.statusCallback = null
+            AivpnService.trafficCallback = null
+        }
     }
 
     /**

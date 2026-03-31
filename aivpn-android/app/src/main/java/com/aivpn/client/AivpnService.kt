@@ -51,6 +51,8 @@ class AivpnService : VpnService() {
     private var serviceJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var udpSocket: DatagramSocket? = null
+    private var tunIn: FileInputStream? = null
+    private var tunOut: FileOutputStream? = null
     @Volatile private var connectionGeneration: Long = 0
     @Volatile private var manualDisconnect = false
 
@@ -73,8 +75,6 @@ class AivpnService : VpnService() {
     @Volatile private var lastKeepaliveResponse = 0L
     @Volatile private var keepalivePending = false
     
-    // Флаг что идет переподключение из-за сети
-    @Volatile private var isNetworkReconnecting = false
     // Флаг что сеть изменилась и нужно сбросить backoff при переподключении
     @Volatile private var networkChanged = false
     // Grace period после установки VPN — игнорируем сетевые изменения
@@ -189,28 +189,22 @@ class AivpnService : VpnService() {
                     // Инициализируем keepalive tracking
                     lastKeepaliveResponse = System.currentTimeMillis()
                     keepalivePending = false
-                    isNetworkReconnecting = false
+                    // Создаем TUN интерфейс
+                    val tunAddress = vpnIp ?: "10.0.0.2"
+                    Log.d(TAG, "Establishing TUN interface with address $tunAddress")
+                    val builder = Builder()
+                        .setSession("AIVPN")
+                        .addAddress(tunAddress, 24)
+                        .addRoute("0.0.0.0", 0)
+                        .addDnsServer("8.8.8.8")
+                        .addDnsServer("1.1.1.1")
+                        .setMtu(TUN_MTU)
+                        .setBlocking(true)
 
-                    // Создаем TUN только если его нет (при сетевом реконнекте переиспользуем)
-                    if (vpnInterface == null) {
-                        val tunAddress = vpnIp ?: "10.0.0.2"
-                        Log.d(TAG, "Establishing TUN interface with address $tunAddress")
-                        val builder = Builder()
-                            .setSession("AIVPN")
-                            .addAddress(tunAddress, 24)
-                            .addRoute("0.0.0.0", 0)
-                            .addDnsServer("8.8.8.8")
-                            .addDnsServer("1.1.1.1")
-                            .setMtu(TUN_MTU)
-                            .setBlocking(true)
-
-                        vpnInterface = builder.establish()
-                            ?: throw Exception("Failed to establish VPN interface")
-                        Log.d(TAG, "TUN interface established")
-                        vpnEstablishedTime = System.currentTimeMillis()
-                    } else {
-                        Log.d(TAG, "Reusing existing TUN interface")
-                    }
+                    vpnInterface = builder.establish()
+                        ?: throw Exception("Failed to establish VPN interface")
+                    Log.d(TAG, "TUN interface established")
+                    vpnEstablishedTime = System.currentTimeMillis()
 
                     isRunning = true
                     lastStatusText = getString(R.string.status_connected, host)
@@ -218,12 +212,14 @@ class AivpnService : VpnService() {
                     updateNotification(getString(R.string.notification_connected, host))
 
                     val tunFd = vpnInterface!!
-                    val tunIn = FileInputStream(tunFd.fileDescriptor)
-                    val tunOut = FileOutputStream(tunFd.fileDescriptor)
+                    val localTunIn = FileInputStream(tunFd.fileDescriptor)
+                    val localTunOut = FileOutputStream(tunFd.fileDescriptor)
+                    tunIn = localTunIn
+                    tunOut = localTunOut
 
                     // Launch three coroutines for bidirectional forwarding/keepalive
-                    val tunToUdp = launch { tunToServer(tunIn, socket, crypto) }
-                    val udpToTun = launch { serverToTun(socket, tunOut, crypto) }
+                    val tunToUdp = launch { tunToServer(localTunIn, socket, crypto) }
+                    val udpToTun = launch { serverToTun(socket, localTunOut, crypto) }
                     val keepaliveLoop = launch { keepaliveToServer(socket, crypto) }
 
                     // Wait until either direction fails or is cancelled.
@@ -244,19 +240,22 @@ class AivpnService : VpnService() {
                     // Make sure all child loops are stopped before cleanup/retry.
                     coroutineContext.cancelChildren()
                     
+                    // Закрываем TUN потоки ПЕРЕД закрытием TUN — это разблокирует
+                    // застрявшие read/write в старых корутинах
+                    try { tunIn?.close() } catch (_: Exception) {}
+                    try { tunOut?.close() } catch (_: Exception) {}
+                    tunIn = null
+                    tunOut = null
+                    
                     // Закрываем UDP сокет
                     try { udpSocket?.close() } catch (_: Exception) {}
                     udpSocket = null
                     
-                    // При сетевом реконнекте НЕ закрываем TUN — переиспользуем его.
-                    // Закрываем TUN только при обычных ошибках (не сетевых).
-                    if (!isNetworkReconnecting) {
-                        try { vpnInterface?.close() } catch (_: Exception) {}
-                        vpnInterface = null
-                    } else {
-                        Log.d(TAG, "Network reconnect — keeping TUN interface alive")
-                        isNetworkReconnecting = false
-                    }
+                    // Всегда закрываем TUN — при реконнекте создадим новый.
+                    // Это гарантирует что старые корутины разблокируются (fd закрыт)
+                    // и новые корутины получат чистый fd.
+                    try { vpnInterface?.close() } catch (_: Exception) {}
+                    vpnInterface = null
 
                     if (connectionGeneration != generation || manualDisconnect) {
                         isRunning = false
@@ -449,7 +448,6 @@ class AivpnService : VpnService() {
                     if (network != currentNetwork) {
                         Log.d(TAG, "Network changed: $currentNetwork -> $network — reconnecting")
                         currentNetwork = network
-                        isNetworkReconnecting = true
                         networkChanged = true
                         triggerNetworkReconnect()
                     } else {
@@ -461,12 +459,9 @@ class AivpnService : VpnService() {
                     super.onLost(network)
                     Log.d(TAG, "Default network lost: $network")
                     currentNetwork = null
-                    if (isRunning) {
-                        isNetworkReconnecting = true
-                        // НЕ закрываем сокет сразу!
-                        // Ждём onAvailable() с новой сетью. Если новая сеть не появится,
-                        // keepalive timeout (30с) сам закроет соединение.
-                    }
+                    // НЕ закрываем сокет сразу!
+                    // Ждём onAvailable() с новой сетью. Если новая сеть не появится,
+                    // keepalive timeout (30с) сам закроет соединение.
                 }
             }
             
@@ -512,8 +507,12 @@ class AivpnService : VpnService() {
     }
 
     private fun cleanup() {
+        try { tunIn?.close() } catch (_: Exception) {}
+        try { tunOut?.close() } catch (_: Exception) {}
         try { vpnInterface?.close() } catch (_: Exception) {}
         try { udpSocket?.close() } catch (_: Exception) {}
+        tunIn = null
+        tunOut = null
         vpnInterface = null
         udpSocket = null
         unregisterNetworkCallback()
