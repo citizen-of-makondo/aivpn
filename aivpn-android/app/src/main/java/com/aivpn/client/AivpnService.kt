@@ -490,7 +490,9 @@ class AivpnService : VpnService() {
             val network = cm.activeNetwork
             if (network != null) {
                 val caps = cm.getNetworkCapabilities(network)
-                if (caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                if (caps != null &&
+                    !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                     return network
                 }
             }
