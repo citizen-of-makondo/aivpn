@@ -109,6 +109,17 @@ git clone https://github.com/infosave2007/aivpn.git
 cd aivpn
 ```
 
+### 1.1 Fork Workflow (for product customization)
+
+If you maintain your own production fork:
+
+- `origin` = your fork
+- `upstream` = `infosave2007/aivpn`
+- keep local `main` synced with `upstream/master`
+- build product changes on `our-prod`
+
+Reference flow: [`docs/FORK_SYNC.md`](docs/FORK_SYNC.md).
+
 ### 2. Build (requires Rust 1.75+)
 
 The project is split into workspaces: `aivpn-common` (crypto & masks), `aivpn-server`, and `aivpn-client`.
@@ -234,6 +245,40 @@ aivpn-server \
     --remove-client "Alice Phone" \
     --clients-db /etc/aivpn/clients.json
 ```
+
+### 3.2 Admin v1 (Web Panel for Client Issuing)
+
+Admin v1 is shipped as a separate service (`aivpn-admin`) and does not replace `aivpn-server`.
+
+Features:
+
+- login/logout
+- list/create/bulk create clients
+- enable/disable/delete clients
+- show `aivpn://` key and QR per client
+
+Quick start:
+
+```bash
+# 1) prepare config
+cp config/admin.env.example config/admin.env
+
+# 2) edit required variables in config/admin.env:
+#    AIVPN_SERVER_ADDR, AIVPN_ADMIN_USER,
+#    AIVPN_ADMIN_PASSWORD_HASH, AIVPN_SESSION_SECRET,
+#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL
+#    (for AIVPN_ADMIN_PASSWORD_HASH in compose env file, escape '$' as '$$')
+
+# 3) start admin backend + HTTPS reverse proxy (Caddy)
+docker compose -f docker-compose.admin.yml up -d --build
+```
+
+The admin backend listens on internal port `8081`; only Caddy is public (`80/443`).
+
+More details:
+
+- [`docs/ADMIN_V1.md`](docs/ADMIN_V1.md)
+- [`docs/IOS_V1_ROADMAP.md`](docs/IOS_V1_ROADMAP.md) (next phase after Admin v1)
 
 ### 4. Client
 

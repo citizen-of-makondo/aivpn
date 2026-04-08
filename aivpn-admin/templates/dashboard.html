@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIVPN Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef3ff;
+      --card: #ffffff;
+      --line: #d8e0f0;
+      --text: #0f172a;
+      --muted: #4b5563;
+      --primary: #0057ff;
+      --danger: #c1121f;
+      --ok: #087f5b;
+      --warn: #9a6700;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1100px 500px at top right, #dce6ff 0%, transparent 60%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: end;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+      min-width: 180px;
+      flex: 1;
+    }
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px 12px;
+      font-size: 14px;
+      width: 100%;
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      background: #e8eeff;
+      color: #08215e;
+    }
+    button.primary { background: var(--primary); color: #fff; }
+    button.danger { background: #ffe8ea; color: #8f0012; }
+    button.ok { background: #daf5ed; color: #0c5f45; }
+    .msg {
+      min-height: 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .msg.error { color: var(--danger); }
+    .msg.ok { color: var(--ok); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge.on { background: #dbfce7; color: #166534; }
+    .badge.off { background: #fee2e2; color: #991b1b; }
+
+    #qr-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.55);
+      display: none;
+      place-items: center;
+      z-index: 1000;
+      padding: 16px;
+    }
+    #qr-modal.open { display: grid; }
+    #qr-body {
+      background: white;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      width: min(480px, 100%);
+      padding: 16px;
+    }
+    #qr-image {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      min-height: 260px;
+      margin: 12px 0;
+      overflow: auto;
+      background: #fff;
+    }
+    #key-text {
+      width: 100%;
+      min-height: 88px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      resize: vertical;
+    }
+    @media (max-width: 880px) {
+      table { display: block; overflow-x: auto; }
+      .field { min-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card top">
+      <div>
+        <h1>AIVPN Admin</h1>
+        <div class="muted">User: {{ admin_user }} · Server: {{ server_addr }}</div>
+      </div>
+      <button id="logout-btn" class="danger">Logout</button>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <div class="field">
+          <label for="create-name">Create Client</label>
+          <input id="create-name" placeholder="e.g. phone-alex">
+        </div>
+        <button id="create-btn" class="primary">Create</button>
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <div class="field">
+          <label for="bulk-prefix">Bulk Prefix</label>
+          <input id="bulk-prefix" placeholder="user-">
+        </div>
+        <div class="field" style="max-width: 160px;">
+          <label for="bulk-count">Count</label>
+          <input id="bulk-count" type="number" min="1" max="500" value="10">
+        </div>
+        <div class="field" style="max-width: 160px;">
+          <label for="bulk-start">Start Index</label>
+          <input id="bulk-start" type="number" min="1" value="1">
+        </div>
+        <button id="bulk-btn" class="primary">Bulk Create</button>
+      </div>
+      <div id="status" class="msg" style="margin-top: 10px;"></div>
+    </section>
+
+    <section class="card">
+      <div class="top" style="margin-bottom: 10px;">
+        <strong>Clients</strong>
+        <button id="refresh-btn">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>ID</th>
+            <th>VPN IP</th>
+            <th>Status</th>
+            <th>Traffic</th>
+            <th>Last Seen</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="clients-body"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <div id="qr-modal">
+    <div id="qr-body">
+      <div class="top">
+        <strong>Connection Key</strong>
+        <button id="close-modal">Close</button>
+      </div>
+      <div id="qr-image"></div>
+      <textarea id="key-text" readonly></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <button id="copy-key" class="ok">Copy Key</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const clientsBody = document.getElementById('clients-body');
+    const qrModal = document.getElementById('qr-modal');
+    const qrImage = document.getElementById('qr-image');
+    const keyText = document.getElementById('key-text');
+
+    function setStatus(text, cls = '') {
+      statusEl.textContent = text;
+      statusEl.className = 'msg ' + cls;
+    }
+
+    function getCookie(name) {
+      const chunks = document.cookie.split(';');
+      for (const chunk of chunks) {
+        const [k, v] = chunk.trim().split('=');
+        if (k === name) return decodeURIComponent(v || '');
+      }
+      return '';
+    }
+
+    function csrfToken() {
+      return getCookie('aivpn_admin_csrf');
+    }
+
+    async function apiFetch(url, options = {}) {
+      const method = (options.method || 'GET').toUpperCase();
+      const headers = Object.assign({}, options.headers || {});
+
+      if (method !== 'GET' && method !== 'HEAD') {
+        const token = csrfToken();
+        if (token) headers['x-csrf-token'] = token;
+      }
+
+      const res = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include'
+      });
+
+      if (res.status === 401) {
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
+      }
+
+      return res;
+    }
+
+    function fmtBytes(bytes) {
+      const n = Number(bytes || 0);
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+      return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    }
+
+    function esc(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    async function loadClients() {
+      const res = await apiFetch('/api/clients');
+      const clients = await res.json();
+
+      if (!Array.isArray(clients) || clients.length === 0) {
+        clientsBody.innerHTML = '<tr><td colspan="7" class="muted">No clients yet.</td></tr>';
+        return;
+      }
+
+      clientsBody.innerHTML = clients.map((c) => {
+        const statusClass = c.enabled ? 'on' : 'off';
+        const statusText = c.enabled ? 'enabled' : 'disabled';
+        const traffic = `${fmtBytes(c.bytes_out)} ↑ / ${fmtBytes(c.bytes_in)} ↓`;
+        const lastSeen = c.last_connected || 'never';
+
+        return `
+          <tr>
+            <td>${esc(c.name)}</td>
+            <td><code>${esc(c.id)}</code></td>
+            <td>${esc(c.vpn_ip)}</td>
+            <td><span class="badge ${statusClass}">${statusText}</span></td>
+            <td>${esc(traffic)}</td>
+            <td>${esc(lastSeen)}</td>
+            <td>
+              <div class="actions">
+                <button onclick="showKey('${esc(c.id)}')">Key</button>
+                <button onclick="showQr('${esc(c.id)}')">QR</button>
+                ${c.enabled
+                  ? `<button class="danger" onclick="toggleClient('${esc(c.id)}', false)">Disable</button>`
+                  : `<button class="ok" onclick="toggleClient('${esc(c.id)}', true)">Enable</button>`}
+                <button class="danger" onclick="deleteClient('${esc(c.id)}')">Delete</button>
+              </div>
+            </td>
+          </tr>`;
+      }).join('');
+    }
+
+    async function createClient() {
+      const input = document.getElementById('create-name');
+      const name = input.value.trim();
+      if (!name) {
+        setStatus('Client name is required', 'error');
+        return;
+      }
+
+      const res = await apiFetch('/api/clients', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setStatus(data.error || 'Create failed', 'error');
+        return;
+      }
+
+      input.value = '';
+      setStatus('Client created', 'ok');
+      await loadClients();
+    }
+
+    async function bulkCreate() {
+      const prefix = document.getElementById('bulk-prefix').value.trim();
+      const count = Number(document.getElementById('bulk-count').value || '0');
+      const start = Number(document.getElementById('bulk-start').value || '1');
+
+      if (!prefix || count < 1) {
+        setStatus('Prefix and count are required', 'error');
+        return;
+      }
+
+      const res = await apiFetch('/api/clients/bulk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prefix, count, start_index: start })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Bulk create failed', 'error');
+        return;
+      }
+
+      const created = (data.created || []).length;
+      const failed = (data.failed || []).length;
+      setStatus(`Bulk done: created ${created}, failed ${failed}`, failed ? 'error' : 'ok');
+      await loadClients();
+    }
+
+    async function toggleClient(id, enable) {
+      const url = enable ? `/api/clients/${id}/enable` : `/api/clients/${id}/disable`;
+      const res = await apiFetch(url, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Update failed', 'error');
+        return;
+      }
+      setStatus(data.message || 'Updated', 'ok');
+      await loadClients();
+    }
+
+    async function deleteClient(id) {
+      if (!confirm(`Delete client ${id}?`)) return;
+
+      const res = await apiFetch(`/api/clients/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Delete failed', 'error');
+        return;
+      }
+
+      setStatus(data.message || 'Deleted', 'ok');
+      await loadClients();
+    }
+
+    async function showKey(id) {
+      const res = await apiFetch(`/api/clients/${id}/connection-key`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Failed to fetch key', 'error');
+        return;
+      }
+
+      keyText.value = data.connection_key || '';
+      qrImage.innerHTML = '<div class="muted">Use the QR button to render QR code.</div>';
+      qrModal.classList.add('open');
+    }
+
+    async function showQr(id) {
+      const keyRes = await apiFetch(`/api/clients/${id}/connection-key`);
+      const keyData = await keyRes.json().catch(() => ({}));
+      if (!keyRes.ok) {
+        setStatus(keyData.error || 'Failed to fetch key', 'error');
+        return;
+      }
+
+      const qrRes = await apiFetch(`/api/clients/${id}/qr`);
+      if (!qrRes.ok) {
+        setStatus('Failed to generate QR', 'error');
+        return;
+      }
+
+      const svg = await qrRes.text();
+      keyText.value = keyData.connection_key || '';
+      qrImage.innerHTML = svg;
+      qrModal.classList.add('open');
+    }
+
+    async function logout() {
+      const res = await apiFetch('/api/logout', { method: 'POST' });
+      if (res.ok) {
+        window.location.href = '/login';
+        return;
+      }
+      setStatus('Logout failed', 'error');
+    }
+
+    document.getElementById('refresh-btn').addEventListener('click', () => loadClients());
+    document.getElementById('create-btn').addEventListener('click', () => createClient());
+    document.getElementById('bulk-btn').addEventListener('click', () => bulkCreate());
+    document.getElementById('logout-btn').addEventListener('click', () => logout());
+    document.getElementById('close-modal').addEventListener('click', () => qrModal.classList.remove('open'));
+    document.getElementById('copy-key').addEventListener('click', async () => {
+      if (!keyText.value) return;
+      await navigator.clipboard.writeText(keyText.value);
+      setStatus('Connection key copied', 'ok');
+    });
+
+    qrModal.addEventListener('click', (event) => {
+      if (event.target === qrModal) qrModal.classList.remove('open');
+    });
+
+    loadClients().catch((e) => setStatus(e.message || 'Failed to load clients', 'error'));
+  </script>
+</body>
+</html>

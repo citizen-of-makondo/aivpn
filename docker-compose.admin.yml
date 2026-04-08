@@ -1,0 +1,40 @@
+services:
+  aivpn-admin:
+    build:
+      context: .
+      dockerfile: aivpn-admin/Dockerfile
+    image: aivpn-admin:latest
+    restart: unless-stopped
+    env_file:
+      - ./config/admin.env
+    volumes:
+      - ./config:/etc/aivpn
+    expose:
+      - "8081"
+    networks:
+      - admin_net
+
+  aivpn-admin-proxy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - aivpn-admin
+    env_file:
+      - ./config/admin.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/admin/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - admin_net
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  admin_net:
+    driver: bridge

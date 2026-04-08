@@ -1,0 +1,17 @@
+{
+  email {$AIVPN_ADMIN_EMAIL}
+}
+
+{$AIVPN_ADMIN_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Frame-Options "DENY"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+    -Server
+  }
+
+  reverse_proxy aivpn-admin:8081
+}

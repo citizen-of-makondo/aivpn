@@ -88,6 +88,17 @@ git clone https://github.com/infosave2007/aivpn.git
 cd aivpn
 ```
 
+### 1.1 Модель работы с форком (для продуктовых доработок)
+
+Если ведете собственный форк под прод:
+
+- `origin` = ваш форк
+- `upstream` = `infosave2007/aivpn`
+- локальная `main` синхронизируется с `upstream/master`
+- продуктовые изменения ведутся в `our-prod`
+
+Пошагово: [`docs/FORK_SYNC.md`](docs/FORK_SYNC.md).
+
 ### 2. Сборка (потребуется Rust 1.75+)
 
 Проект разбит на воркспейсы: `aivpn-common` (шифры и маски), `aivpn-server` и `aivpn-client`.
@@ -213,6 +224,40 @@ aivpn-server \
     --remove-client "Телефон Алисы" \
     --clients-db /etc/aivpn/clients.json
 ```
+
+### 3.2 Admin v1 (веб-панель для массовой выдачи ключей)
+
+Admin v1 работает как отдельный сервис (`aivpn-admin`) и не встраивается в `aivpn-server`.
+
+Функции:
+
+- login/logout
+- список клиентов, создание, bulk создание
+- enable/disable/delete клиента
+- показ `aivpn://` ключа и QR по каждому клиенту
+
+Быстрый запуск:
+
+```bash
+# 1) подготовить конфиг
+cp config/admin.env.example config/admin.env
+
+# 2) заполнить обязательные переменные в config/admin.env:
+#    AIVPN_SERVER_ADDR, AIVPN_ADMIN_USER,
+#    AIVPN_ADMIN_PASSWORD_HASH, AIVPN_SESSION_SECRET,
+#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL
+#    (для AIVPN_ADMIN_PASSWORD_HASH в compose env-файле символ '$' нужно писать как '$$')
+
+# 3) поднять backend админки + HTTPS reverse proxy (Caddy)
+docker compose -f docker-compose.admin.yml up -d --build
+```
+
+`aivpn-admin` слушает внутренний порт `8081`, наружу публикуется только Caddy (`80/443`).
+
+Подробнее:
+
+- [`docs/ADMIN_V1.md`](docs/ADMIN_V1.md)
+- [`docs/IOS_V1_ROADMAP.md`](docs/IOS_V1_ROADMAP.md) (следующий этап после Admin v1)
 
 ### 4. Клиент
 

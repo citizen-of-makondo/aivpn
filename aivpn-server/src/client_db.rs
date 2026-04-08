@@ -156,6 +156,18 @@ impl ClientDatabase {
         Ok(())
     }
 
+    /// Enable or disable a client by ID
+    pub fn set_client_enabled(&self, client_id: &str, enabled: bool) -> Result<()> {
+        let mut data = self.data.write();
+        let Some(client) = data.clients.iter_mut().find(|c| c.id == client_id) else {
+            return Err(Error::Session(format!("Client '{}' not found", client_id)));
+        };
+        client.enabled = enabled;
+        drop(data);
+        self.save()?;
+        Ok(())
+    }
+
     /// Get all clients
     pub fn list_clients(&self) -> Vec<ClientConfig> {
         self.data.read().clients.clone()
