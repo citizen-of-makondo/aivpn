@@ -14,20 +14,29 @@ app_target = project.new_target(:application, 'AIVPN', :ios, '16.0')
 tunnel_target = project.new_target(:app_extension, 'AIVPNTunnel', :ios, '16.0')
 tests_target = project.new_target(:unit_test_bundle, 'AIVPNTests', :ios, '16.0')
 
-def set_common_settings(target, bundle_id:, plist_path:, swift_version: '5.0')
+def set_common_settings(target, bundle_id:, plist_path:, swift_version: '5.0', generate_infoplist: true)
   target.build_configurations.each do |config|
     config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = bundle_id
-    config.build_settings['INFOPLIST_FILE'] = plist_path
     config.build_settings['SWIFT_VERSION'] = swift_version
     config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
     config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
-    config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
-    config.build_settings.delete('INFOPLIST_FILE')
+    if generate_infoplist
+      config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+      config.build_settings.delete('INFOPLIST_FILE')
+    else
+      config.build_settings['GENERATE_INFOPLIST_FILE'] = 'NO'
+      config.build_settings['INFOPLIST_FILE'] = plist_path
+    end
   end
 end
 
 set_common_settings(app_target, bundle_id: 'com.aivpn.ios', plist_path: 'AIVPNApp/Info.plist')
-set_common_settings(tunnel_target, bundle_id: 'com.aivpn.ios.tunnel', plist_path: 'AIVPNTunnel/Info.plist')
+set_common_settings(
+  tunnel_target,
+  bundle_id: 'com.aivpn.ios.tunnel',
+  plist_path: 'AIVPNTunnel/Info.plist',
+  generate_infoplist: false
+)
 set_common_settings(tests_target, bundle_id: 'com.aivpn.ios.tests', plist_path: 'Tests/Info.plist')
 
 # App-specific
@@ -55,14 +64,23 @@ app_group = main_group.new_group('AIVPNApp', 'AIVPNApp')
 tunnel_group = main_group.new_group('AIVPNTunnel', 'AIVPNTunnel')
 tests_group = main_group.new_group('Tests', 'Tests')
 
-app_files = %w[AIVPNApp.swift ContentView.swift].map { |f| app_group.new_file(f) }
+app_files = Dir.children(ROOT.join('AIVPNApp'))
+               .grep(/\.swift\z/)
+               .sort
+               .map { |f| app_group.new_file(f) }
 app_target.add_file_references(app_files)
 
-tunnel_file = tunnel_group.new_file('PacketTunnelProvider.swift')
-tunnel_target.add_file_references([tunnel_file])
+tunnel_files = Dir.children(ROOT.join('AIVPNTunnel'))
+                  .grep(/\.swift\z/)
+                  .sort
+                  .map { |f| tunnel_group.new_file(f) }
+tunnel_target.add_file_references(tunnel_files)
 
-test_file = tests_group.new_file('AIVPNTests.swift')
-tests_target.add_file_references([test_file])
+test_files = Dir.children(ROOT.join('Tests'))
+               .grep(/\.swift\z/)
+               .sort
+               .map { |f| tests_group.new_file(f) }
+tests_target.add_file_references(test_files)
 
 # Link test target with app target
 tests_target.add_dependency(app_target)
@@ -82,4 +100,15 @@ embed_phase.add_file_reference(tunnel_target.product_reference, true)
 app_target.add_dependency(tunnel_target)
 
 project.save
+
+app_scheme = Xcodeproj::XCScheme.new
+app_scheme.configure_with_targets(app_target, tests_target, launch_target: app_target)
+app_scheme.add_build_target(tunnel_target)
+app_scheme.save_as(PROJECT_PATH, 'AIVPN', true)
+
+tunnel_scheme = Xcodeproj::XCScheme.new
+tunnel_scheme.set_launch_target(tunnel_target)
+tunnel_scheme.add_build_target(tunnel_target)
+tunnel_scheme.save_as(PROJECT_PATH, 'AIVPNTunnel', true)
+
 puts "Generated #{PROJECT_PATH}"

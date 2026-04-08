@@ -1,19 +1,52 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var viewModel = VPNConnectionViewModel()
+
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 44))
-                .foregroundStyle(.blue)
-            Text("AIVPN iOS")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("Phase 1 skeleton is ready")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        NavigationStack {
+            Form {
+                Section("Connection Key") {
+                    TextEditor(text: $viewModel.keyInput)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 110)
+
+                    Button("Save Key") {
+                        _ = viewModel.saveKey()
+                    }
+                }
+
+                Section("Connection") {
+                    LabeledContent("Status", value: viewModel.statusText)
+
+                    Button("Connect") {
+                        viewModel.connect()
+                    }
+                    .disabled(!viewModel.canConnect)
+
+                    Button("Disconnect", role: .destructive) {
+                        viewModel.disconnect()
+                    }
+                    .disabled(!viewModel.canDisconnect)
+                }
+
+                if let parsed = viewModel.parsedKey {
+                    Section("Parsed Key") {
+                        LabeledContent("Server", value: parsed.serverAddress)
+                        LabeledContent("Port", value: "\(parsed.port)")
+                        LabeledContent("Client ID", value: parsed.clientID)
+                    }
+                }
+
+                if let message = viewModel.validationMessage {
+                    Section("Validation") {
+                        Text(message)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("AIVPN")
         }
-        .padding(24)
     }
 }
 
