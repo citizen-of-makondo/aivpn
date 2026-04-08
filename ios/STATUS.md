@@ -1,6 +1,6 @@
 # iOS v1 Status (Token-Safe Delivery)
 
-Last Updated: 2026-04-08 (Phase 2 closed)
+Last Updated: 2026-04-08 (Phase 3 closed)
 Branch: `our-prod`
 Primary Repo: `origin` (`citizen-of-makondo/aivpn`)
 
@@ -18,7 +18,7 @@ Primary Repo: `origin` (`citizen-of-makondo/aivpn`)
 - [x] Phase 0: Process scaffold (`ios/` folder + this status file)
 - [x] Phase 1: Xcode skeleton (App + PacketTunnel extension)
 - [x] Phase 2: v1 UI (key input, validation, storage, state)
-- [ ] Phase 3: Rust iOS core foundation (C ABI + header + XCFramework build)
+- [x] Phase 3: Rust iOS core foundation (C ABI + header + XCFramework build)
 - [ ] Phase 4: Swift <-> Rust bridge (Rust key parsing wired into app)
 - [ ] Phase 5: Tunnel lifecycle (start/stop + UDP endpoint + init packet)
 - [ ] Phase 6: Data plane v1 (read/write packets via Rust core)
@@ -41,6 +41,12 @@ Each phase is complete only when all are done:
 
 - Phase 2 test gate passed:
   `xcodebuild -project ios/AIVPN.xcodeproj -scheme AIVPN -configuration Debug -destination 'id=BD9B3CE5-780D-4205-9C12-538F80FDF290' CODE_SIGNING_ALLOWED=NO test`
+
+- Phase 3 build gate passed:
+  `./ios/rust-core/scripts/build_xcframework.sh`
+
+- Phase 3 rust unit tests passed:
+  `cargo test --manifest-path ios/rust-core/aivpn-ios-core/Cargo.toml`
 
 ## Resume Command
 
