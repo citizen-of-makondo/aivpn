@@ -1,6 +1,6 @@
 # iOS v1 Status (Token-Safe Delivery)
 
-Last Updated: 2026-04-08
+Last Updated: 2026-04-08 (Phase 1 closed)
 Branch: `our-prod`
 Primary Repo: `origin` (`citizen-of-makondo/aivpn`)
 
@@ -16,7 +16,7 @@ Primary Repo: `origin` (`citizen-of-makondo/aivpn`)
 ## Phase Checklist
 
 - [x] Phase 0: Process scaffold (`ios/` folder + this status file)
-- [ ] Phase 1: Xcode skeleton (App + PacketTunnel extension)
+- [x] Phase 1: Xcode skeleton (App + PacketTunnel extension)
 - [ ] Phase 2: v1 UI (key input, validation, storage, state)
 - [ ] Phase 3: Rust iOS core foundation (C ABI + header + XCFramework build)
 - [ ] Phase 4: Swift <-> Rust bridge (Rust key parsing wired into app)
@@ -33,6 +33,11 @@ Each phase is complete only when all are done:
 2. `ios/STATUS.md` updated.
 3. Commit created with phase message.
 4. Pushed to `origin/our-prod`.
+
+## Latest Gate Result
+
+- Phase 1 build gate passed:
+  `xcodebuild -project ios/AIVPN.xcodeproj -scheme AIVPN -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
 
 ## Resume Command
 
