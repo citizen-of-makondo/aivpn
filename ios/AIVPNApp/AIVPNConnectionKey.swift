@@ -3,20 +3,57 @@ import Foundation
 struct AIVPNConnectionKey: Equatable {
     static let schemePrefix = "aivpn://"
 
-    let serverAddress: String
-    let sharedKey: String
-    let port: Int
-    let clientID: String
+    let serverEndpoint: String
+    let serverPublicKeyBase64: String
+    let preSharedKeyBase64: String?
+    let clientIPAddress: String
 
-    init(serverAddress: String, sharedKey: String, port: Int, clientID: String) {
-        self.serverAddress = serverAddress
-        self.sharedKey = sharedKey
-        self.port = port
-        self.clientID = clientID
+    var host: String {
+        let endpoint = serverEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if endpoint.hasPrefix("[") {
+            guard let close = endpoint.firstIndex(of: "]") else { return endpoint }
+            return String(endpoint[endpoint.index(after: endpoint.startIndex)..<close])
+        }
+
+        if endpoint.split(separator: ":").count > 2 {
+            return endpoint
+        }
+
+        if let idx = endpoint.lastIndex(of: ":") {
+            return String(endpoint[..<idx])
+        }
+        return endpoint
+    }
+
+    var port: Int {
+        let endpoint = serverEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if endpoint.hasPrefix("[") {
+            guard let close = endpoint.firstIndex(of: "]") else { return 443 }
+            let suffix = endpoint[close...]
+            if suffix.hasPrefix("]:") {
+                let start = endpoint.index(close, offsetBy: 2)
+                return Int(endpoint[start...]) ?? 443
+            }
+            return 443
+        }
+
+        if endpoint.split(separator: ":").count > 2 {
+            return 443
+        }
+
+        guard let idx = endpoint.lastIndex(of: ":") else {
+            return 443
+        }
+        return Int(endpoint[endpoint.index(after: idx)...]) ?? 443
     }
 
     var rawValue: String {
-        let payload = Payload(s: serverAddress, k: sharedKey, p: port, i: clientID)
+        let payload = Payload(
+            s: serverEndpoint,
+            k: serverPublicKeyBase64,
+            p: preSharedKeyBase64,
+            i: clientIPAddress
+        )
         let data = try? JSONEncoder().encode(payload)
         let encoded = data?.base64URLEncodedString() ?? ""
         return "\(Self.schemePrefix)\(encoded)"
@@ -24,62 +61,24 @@ struct AIVPNConnectionKey: Equatable {
 
     static func parse(_ raw: String) throws -> AIVPNConnectionKey {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(Self.schemePrefix) else {
-            throw AIVPNKeyParseError.invalidPrefix
-        }
-
-        let payloadPart = String(trimmed.dropFirst(Self.schemePrefix.count))
-        guard !payloadPart.isEmpty else {
+        guard !trimmed.isEmpty else {
             throw AIVPNKeyParseError.emptyPayload
         }
 
-        guard let data = Data(base64URLEncoded: payloadPart) else {
-            throw AIVPNKeyParseError.invalidBase64
+        if !trimmed.hasPrefix(Self.schemePrefix) {
+            throw AIVPNKeyParseError.invalidPrefix
         }
 
-        let payload: Payload
-        do {
-            payload = try JSONDecoder().decode(Payload.self, from: data)
-        } catch {
-            throw AIVPNKeyParseError.invalidJSON
-        }
-
-        let serverAddress = payload.s.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !serverAddress.isEmpty else {
-            throw AIVPNKeyParseError.missingServer
-        }
-
-        let sharedKey = payload.k.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sharedKey.isEmpty else {
-            throw AIVPNKeyParseError.missingSharedKey
-        }
-
-        guard (1...65_535).contains(payload.p) else {
-            throw AIVPNKeyParseError.invalidPort
-        }
-
-        let clientID = payload.i.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clientID.isEmpty else {
-            throw AIVPNKeyParseError.missingClientID
-        }
-
-        return AIVPNConnectionKey(
-            serverAddress: serverAddress,
-            sharedKey: sharedKey,
-            port: payload.p,
-            clientID: clientID
-        )
+        return try AIVPNRustBridge.parseKey(trimmed)
     }
 }
 
 enum AIVPNKeyParseError: Error, LocalizedError, Equatable {
     case invalidPrefix
     case emptyPayload
-    case invalidBase64
-    case invalidJSON
-    case missingServer
+    case rustError(String)
+    case invalidServer
     case missingSharedKey
-    case invalidPort
     case missingClientID
 
     var errorDescription: String? {
@@ -87,19 +86,15 @@ enum AIVPNKeyParseError: Error, LocalizedError, Equatable {
         case .invalidPrefix:
             return "Key must start with aivpn://"
         case .emptyPayload:
-            return "Key payload is empty"
-        case .invalidBase64:
-            return "Key payload is not valid Base64URL"
-        case .invalidJSON:
-            return "Key payload is not valid JSON"
-        case .missingServer:
-            return "Server address (s) is required"
+            return "Connection key is required"
+        case .rustError(let message):
+            return message
+        case .invalidServer:
+            return "Server endpoint is invalid"
         case .missingSharedKey:
-            return "Shared key (k) is required"
-        case .invalidPort:
-            return "Port (p) must be in range 1...65535"
+            return "Server public key (k) is required"
         case .missingClientID:
-            return "Client id (i) is required"
+            return "Client IP (i) is required"
         }
     }
 }
@@ -107,8 +102,58 @@ enum AIVPNKeyParseError: Error, LocalizedError, Equatable {
 private struct Payload: Codable, Equatable {
     let s: String
     let k: String
-    let p: Int
+    let p: String?
     let i: String
+}
+
+enum AIVPNRustBridge {
+    static func parseKey(_ raw: String) throws -> AIVPNConnectionKey {
+        var parsed = AivpnParsedKey()
+        var errorPointer: UnsafeMutablePointer<CChar>? = nil
+
+        let status = raw.withCString { cString -> Int32 in
+            aivpn_parse_key(cString, &parsed, &errorPointer)
+        }
+
+        defer {
+            aivpn_parsed_key_free(&parsed)
+            if let errorPointer {
+                aivpn_error_free(errorPointer)
+            }
+        }
+
+        guard status == Int32(AIVPN_OK) else {
+            throw AIVPNKeyParseError.rustError(cString(errorPointer) ?? "Rust parse failed with code \(status)")
+        }
+
+        guard let server = cString(parsed.server), !server.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AIVPNKeyParseError.invalidServer
+        }
+
+        guard let serverKey = cString(parsed.server_key_b64), !serverKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AIVPNKeyParseError.missingSharedKey
+        }
+
+        guard let clientID = cString(parsed.client_ip), !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AIVPNKeyParseError.missingClientID
+        }
+
+        let psk = cString(parsed.psk_b64)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return AIVPNConnectionKey(
+            serverEndpoint: server.trimmingCharacters(in: .whitespacesAndNewlines),
+            serverPublicKeyBase64: serverKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            preSharedKeyBase64: psk?.isEmpty == true ? nil : psk,
+            clientIPAddress: clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    static func cString(_ value: UnsafePointer<CChar>?) -> String? {
+        guard let value else {
+            return nil
+        }
+        return String(cString: value)
+    }
 }
 
 private extension Data {

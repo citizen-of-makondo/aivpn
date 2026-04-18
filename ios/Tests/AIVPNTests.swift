@@ -1,15 +1,22 @@
+import NetworkExtension
 import XCTest
 @testable import AIVPN
 
 final class AIVPNTests: XCTestCase {
-    func testParseValidKey() throws {
-        let raw = makeRawKey(server: "194.154.25.21", sharedKey: "secret", port: 443, clientID: "abc123")
+    func testParseValidKeyViaRust() throws {
+        let raw = makeRawKey(
+            endpoint: "194.154.25.21:443",
+            serverPublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            psk: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            clientIP: "10.0.0.2"
+        )
         let parsed = try AIVPNConnectionKey.parse(raw)
 
-        XCTAssertEqual(parsed.serverAddress, "194.154.25.21")
-        XCTAssertEqual(parsed.sharedKey, "secret")
+        XCTAssertEqual(parsed.serverEndpoint, "194.154.25.21:443")
+        XCTAssertEqual(parsed.host, "194.154.25.21")
         XCTAssertEqual(parsed.port, 443)
-        XCTAssertEqual(parsed.clientID, "abc123")
+        XCTAssertEqual(parsed.clientIPAddress, "10.0.0.2")
+        XCTAssertNotNil(parsed.preSharedKeyBase64)
     }
 
     func testParseFailsOnInvalidPrefix() {
@@ -18,52 +25,72 @@ final class AIVPNTests: XCTestCase {
         }
     }
 
-    func testParseFailsOnInvalidPort() {
-        let raw = makeRawKey(server: "example.org", sharedKey: "secret", port: 70_000, clientID: "abc")
-        XCTAssertThrowsError(try AIVPNConnectionKey.parse(raw)) { error in
-            XCTAssertEqual(error as? AIVPNKeyParseError, .invalidPort)
-        }
-    }
-
     @MainActor
-    func testViewModelConnectStoresKeyAndSetsConnected() {
+    func testViewModelConnectStoresKeyAndRequestsTunnelStart() async {
         let store = InMemoryKeyValueStore()
-        let viewModel = VPNConnectionViewModel(store: store)
-        viewModel.keyInput = makeRawKey(server: "example.org", sharedKey: "secret", port: 443, clientID: "cli-1")
+        let controller = MockVPNController()
+        let viewModel = VPNConnectionViewModel(store: store, controller: controller)
+        viewModel.keyInput = makeRawKey(
+            endpoint: "example.org:443",
+            serverPublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            psk: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            clientIP: "10.0.0.9"
+        )
 
         viewModel.connect()
+        try? await Task.sleep(for: .milliseconds(50))
 
-        XCTAssertEqual(viewModel.status, .connected)
-        XCTAssertNil(viewModel.validationMessage)
         XCTAssertNotNil(store.string(forKey: VPNConnectionViewModel.storedConnectionKeyKey))
+        let startCalls = await controller.getStartCallCount()
+        XCTAssertEqual(startCalls, 1)
     }
 
     @MainActor
-    func testViewModelConnectRejectsInvalidKey() {
+    func testViewModelConnectRejectsInvalidKey() async {
         let store = InMemoryKeyValueStore()
-        let viewModel = VPNConnectionViewModel(store: store)
+        let controller = MockVPNController()
+        let viewModel = VPNConnectionViewModel(store: store, controller: controller)
         viewModel.keyInput = "invalid-key"
 
         viewModel.connect()
+        try? await Task.sleep(for: .milliseconds(30))
 
         XCTAssertEqual(viewModel.status, .disconnected)
         XCTAssertNotNil(viewModel.validationMessage)
         XCTAssertNil(store.string(forKey: VPNConnectionViewModel.storedConnectionKeyKey))
+        let startCalls = await controller.getStartCallCount()
+        XCTAssertEqual(startCalls, 0)
     }
 
     @MainActor
     func testViewModelLoadsStoredKeyOnInit() {
-        let raw = makeRawKey(server: "example.org", sharedKey: "secret", port: 443, clientID: "persisted")
+        let raw = makeRawKey(
+            endpoint: "example.org:443",
+            serverPublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            psk: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            clientIP: "10.0.0.20"
+        )
         let store = InMemoryKeyValueStore(initial: [VPNConnectionViewModel.storedConnectionKeyKey: raw])
 
-        let viewModel = VPNConnectionViewModel(store: store)
+        let viewModel = VPNConnectionViewModel(store: store, controller: MockVPNController())
 
         XCTAssertEqual(viewModel.keyInput, raw)
-        XCTAssertEqual(viewModel.parsedKey?.clientID, "persisted")
+        XCTAssertEqual(viewModel.parsedKey?.clientIPAddress, "10.0.0.20")
     }
 
-    private func makeRawKey(server: String, sharedKey: String, port: Int, clientID: String) -> String {
-        AIVPNConnectionKey(serverAddress: server, sharedKey: sharedKey, port: port, clientID: clientID).rawValue
+    private func makeRawKey(endpoint: String, serverPublicKey: String, psk: String, clientIP: String) -> String {
+        let payload: [String: String] = [
+            "s": endpoint,
+            "k": serverPublicKey,
+            "p": psk,
+            "i": clientIP,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: payload, options: [])
+        let encoded = data.base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        return "aivpn://\(encoded)"
     }
 }
 
@@ -84,5 +111,27 @@ private final class InMemoryKeyValueStore: KeyValueStore {
         } else {
             storage.removeValue(forKey: key)
         }
+    }
+}
+
+actor MockVPNController: VPNController {
+    private(set) var startCallCount = 0
+    private var currentStatus: NEVPNStatus = .disconnected
+
+    func start(connectionKey: String) async throws {
+        startCallCount += 1
+        currentStatus = .connected
+    }
+
+    func stop() async {
+        currentStatus = .disconnected
+    }
+
+    func status() async -> NEVPNStatus {
+        currentStatus
+    }
+
+    func getStartCallCount() async -> Int {
+        startCallCount
     }
 }

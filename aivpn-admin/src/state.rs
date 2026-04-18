@@ -10,6 +10,7 @@ use chrono::Utc;
 use aivpn_server::ClientDatabase;
 
 use crate::config::AdminConfig;
+use crate::invite_store::InviteStore;
 use crate::rate_limit::SlidingWindowRateLimiter;
 
 pub struct AuditLogger {
@@ -58,6 +59,7 @@ impl AuditLogger {
 pub struct AppState {
     pub config: AdminConfig,
     pub client_db: Arc<ClientDatabase>,
+    pub invite_store: Arc<InviteStore>,
     pub server_public_key_b64: String,
     pub login_limiter: SlidingWindowRateLimiter,
     pub mutation_limiter: SlidingWindowRateLimiter,
@@ -68,6 +70,7 @@ impl AppState {
     pub fn new(
         config: AdminConfig,
         client_db: Arc<ClientDatabase>,
+        invite_store: Arc<InviteStore>,
         server_public_key_b64: String,
         audit: AuditLogger,
     ) -> Self {
@@ -82,6 +85,7 @@ impl AppState {
             ),
             config,
             client_db,
+            invite_store,
             server_public_key_b64,
             audit,
         }

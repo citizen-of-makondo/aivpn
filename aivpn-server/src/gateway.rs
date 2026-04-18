@@ -35,6 +35,35 @@ use crate::neural::{NeuralResonanceModule, NeuralConfig, ResonanceStatus};
 use crate::metrics::MetricsCollector;
 use crate::client_db::ClientDatabase;
 
+fn stats_flush_interval_secs_from_env() -> u64 {
+    const DEFAULT_SECS: u64 = 10;
+    const MIN_SECS: u64 = 1;
+    const MAX_SECS: u64 = 3600;
+
+    let raw = match std::env::var("AIVPN_STATS_FLUSH_INTERVAL_SECS") {
+        Ok(v) => v,
+        Err(_) => return DEFAULT_SECS,
+    };
+
+    match raw.trim().parse::<u64>() {
+        Ok(v) if (MIN_SECS..=MAX_SECS).contains(&v) => v,
+        Ok(v) => {
+            warn!(
+                "AIVPN_STATS_FLUSH_INTERVAL_SECS={} out of range ({}..={}), using default {}",
+                v, MIN_SECS, MAX_SECS, DEFAULT_SECS
+            );
+            DEFAULT_SECS
+        }
+        Err(e) => {
+            warn!(
+                "Failed to parse AIVPN_STATS_FLUSH_INTERVAL_SECS='{}' ({}) using default {}",
+                raw, e, DEFAULT_SECS
+            );
+            DEFAULT_SECS
+        }
+    }
+}
+
 struct QueuedPacket {
     packet_data: Vec<u8>,
     client_addr: SocketAddr,
@@ -324,16 +353,20 @@ impl Gateway {
             info!("Session cleanup task spawned (60s interval)");
         }
         
-        // Spawn client DB stats flush task (persist traffic stats every 5 min)
+        // Spawn client DB stats flush task (interval is configurable via env)
         if let Some(ref db) = self.client_db {
             let db = db.clone();
+            let flush_interval_secs = stats_flush_interval_secs_from_env();
             tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(300)).await;
+                    tokio::time::sleep(Duration::from_secs(flush_interval_secs)).await;
                     db.flush_stats();
                 }
             });
-            info!("Client stats flush task spawned (300s interval)");
+            info!(
+                "Client stats flush task spawned ({}s interval)",
+                flush_interval_secs
+            );
         }
         
         // Spawn client DB hot-reload task (pick up new clients without restart)

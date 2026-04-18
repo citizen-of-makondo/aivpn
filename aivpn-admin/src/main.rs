@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod handlers;
+mod invite_store;
 mod models;
 mod rate_limit;
 mod state;
@@ -13,14 +14,24 @@ use axum::routing::{get, post};
 use axum::Router;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use serde::Deserialize;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use aivpn_common::crypto::KeyPair;
+use aivpn_common::network_config::{netmask_to_prefix_len, VpnNetworkConfig};
 use aivpn_server::ClientDatabase;
 
 use config::AdminConfig;
+use invite_store::InviteStore;
 use state::{AppState, AuditLogger};
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ServerConfigFile {
+    network_config: Option<VpnNetworkConfig>,
+    tun_addr: Option<std::net::Ipv4Addr>,
+    tun_netmask: Option<std::net::Ipv4Addr>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -34,7 +45,9 @@ async fn main() {
         }
     };
 
-    let client_db = match ClientDatabase::load(&config.clients_db_path()) {
+    let network_config = load_network_config_from_server_config(&config.config_dir);
+
+    let client_db = match ClientDatabase::load(&config.clients_db_path(), network_config) {
         Ok(db) => Arc::new(db),
         Err(e) => {
             error!("failed to load clients db: {e}");
@@ -50,6 +63,14 @@ async fn main() {
         }
     };
 
+    let invite_store = match InviteStore::new(config.invites_path()) {
+        Ok(v) => Arc::new(v),
+        Err(e) => {
+            error!("failed to initialize invites store: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let audit = match AuditLogger::new(&config.audit_log_path()) {
         Ok(v) => v,
         Err(e) => {
@@ -61,9 +82,21 @@ async fn main() {
     let state = Arc::new(AppState::new(
         config.clone(),
         client_db,
+        invite_store,
         server_public_key_b64,
         audit,
     ));
+
+    // Keep admin API view in sync with runtime client changes.
+    {
+        let client_db = state.client_db.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                client_db.reload_if_changed();
+            }
+        });
+    }
 
     let api_routes = Router::new()
         .route("/login", post(handlers::api_login))
@@ -77,7 +110,9 @@ async fn main() {
             "/clients/:id/connection-key",
             get(handlers::api_get_connection_key),
         )
-        .route("/clients/:id/qr", get(handlers::api_get_connection_qr));
+        .route("/clients/:id/qr", get(handlers::api_get_connection_qr))
+        .route("/invites", get(handlers::api_list_invites).post(handlers::api_create_invite))
+        .route("/invites/:id/revoke", post(handlers::api_revoke_invite));
 
     let app = Router::new()
         .route("/", get(handlers::get_dashboard))
@@ -139,4 +174,44 @@ fn init_logging() {
             }),
         )
         .init();
+}
+
+fn load_network_config_from_server_config(config_dir: &Path) -> VpnNetworkConfig {
+    let server_json = config_dir.join("server.json");
+    let server_example = config_dir.join("server.json.example");
+    let path = if server_json.exists() {
+        server_json
+    } else if server_example.exists() {
+        server_example
+    } else {
+        return VpnNetworkConfig::default();
+    };
+
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(v) => v,
+        Err(_) => return VpnNetworkConfig::default(),
+    };
+
+    let parsed: ServerConfigFile = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return VpnNetworkConfig::default(),
+    };
+
+    if let Some(cfg) = parsed.network_config {
+        return cfg;
+    }
+
+    if let (Some(server_vpn_ip), Some(netmask)) = (parsed.tun_addr, parsed.tun_netmask) {
+        let prefix_len = match netmask_to_prefix_len(netmask) {
+            Ok(v) => v,
+            Err(_) => return VpnNetworkConfig::default(),
+        };
+        return VpnNetworkConfig {
+            server_vpn_ip,
+            prefix_len,
+            mtu: aivpn_common::network_config::DEFAULT_VPN_MTU,
+        };
+    }
+
+    VpnNetworkConfig::default()
 }

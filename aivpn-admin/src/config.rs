@@ -98,6 +98,10 @@ impl AdminConfig {
     pub fn audit_log_path(&self) -> PathBuf {
         self.config_dir.join("admin-audit.log")
     }
+
+    pub fn invites_path(&self) -> PathBuf {
+        self.config_dir.join("invites.json")
+    }
 }
 
 fn parse_usize_env(name: &'static str, default: usize) -> Result<usize, ConfigError> {

@@ -28,7 +28,7 @@
       min-height: 100vh;
     }
     .wrap {
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 0 auto;
       padding: 18px;
       display: grid;
@@ -100,6 +100,28 @@
     }
     .msg.error { color: var(--danger); }
     .msg.ok { color: var(--ok); }
+    .stats {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .stat {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 4px 10px;
+      background: #f8faff;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .stat strong { color: var(--text); }
+    .grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 1024px) {
+      .grid { grid-template-columns: 2fr 1fr; }
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -123,9 +145,14 @@
       padding: 3px 8px;
       font-size: 11px;
       font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
     .badge.on { background: #dbfce7; color: #166534; }
     .badge.off { background: #fee2e2; color: #991b1b; }
+    .badge.active { background: #dae9ff; color: #113a8f; }
+    .badge.used { background: #fef3c7; color: #92400e; }
+    .badge.revoked { background: #fee2e2; color: #991b1b; }
 
     #qr-modal {
       position: fixed;
@@ -154,19 +181,19 @@
       overflow: auto;
       background: #fff;
     }
-    #key-text {
+    #key-text,
+    #invite-code-out {
       width: 100%;
-      min-height: 88px;
+      min-height: 44px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 8px;
       resize: vertical;
     }
-    @media (max-width: 880px) {
-      table { display: block; overflow-x: auto; }
-      .field { min-width: 100%; }
-    }
+    #key-text { min-height: 88px; }
+
+    .table-wrap { overflow-x: auto; }
   </style>
 </head>
 <body>
@@ -176,54 +203,96 @@
         <h1>AIVPN Admin</h1>
         <div class="muted">User: {{ admin_user }} · Server: {{ server_addr }}</div>
       </div>
-      <button id="logout-btn" class="danger">Logout</button>
+      <div class="row">
+        <button id="refresh-btn">Refresh Now</button>
+        <button id="logout-btn" class="danger">Logout</button>
+      </div>
     </section>
 
     <section class="card">
-      <div class="row">
-        <div class="field">
-          <label for="create-name">Create Client</label>
-          <input id="create-name" placeholder="e.g. phone-alex">
-        </div>
-        <button id="create-btn" class="primary">Create</button>
+      <div class="stats" id="stats-bar">
+        <div class="stat">Total: <strong id="stat-total">0</strong></div>
+        <div class="stat">Enabled: <strong id="stat-enabled">0</strong></div>
+        <div class="stat">Online: <strong id="stat-online">0</strong></div>
+        <div class="stat">Auto refresh: <strong>5s</strong></div>
       </div>
-      <div class="row" style="margin-top: 12px;">
-        <div class="field">
-          <label for="bulk-prefix">Bulk Prefix</label>
-          <input id="bulk-prefix" placeholder="user-">
-        </div>
-        <div class="field" style="max-width: 160px;">
-          <label for="bulk-count">Count</label>
-          <input id="bulk-count" type="number" min="1" max="500" value="10">
-        </div>
-        <div class="field" style="max-width: 160px;">
-          <label for="bulk-start">Start Index</label>
-          <input id="bulk-start" type="number" min="1" value="1">
-        </div>
-        <button id="bulk-btn" class="primary">Bulk Create</button>
-      </div>
-      <div id="status" class="msg" style="margin-top: 10px;"></div>
     </section>
+
+    <div class="grid">
+      <section class="card">
+        <div class="row">
+          <div class="field">
+            <label for="create-name">Create Client</label>
+            <input id="create-name" placeholder="e.g. phone-alex">
+          </div>
+          <button id="create-btn" class="primary">Create</button>
+        </div>
+
+        <div class="row" style="margin-top: 12px;">
+          <div class="field">
+            <label for="bulk-prefix">Bulk Prefix</label>
+            <input id="bulk-prefix" placeholder="user-">
+          </div>
+          <div class="field" style="max-width: 160px;">
+            <label for="bulk-count">Count</label>
+            <input id="bulk-count" type="number" min="1" max="500" value="10">
+          </div>
+          <div class="field" style="max-width: 160px;">
+            <label for="bulk-start">Start Index</label>
+            <input id="bulk-start" type="number" min="1" value="1">
+          </div>
+          <button id="bulk-btn" class="primary">Bulk Create</button>
+        </div>
+
+        <div id="status" class="msg" style="margin-top: 10px;"></div>
+      </section>
+
+      <section class="card">
+        <div class="top" style="margin-bottom: 10px;">
+          <strong>Invites</strong>
+          <button id="create-invite-btn" class="primary">Create Invite</button>
+        </div>
+        <label for="invite-code-out" class="muted">New invite code (shown once)</label>
+        <input id="invite-code-out" readonly placeholder="No invite created yet">
+
+        <div class="table-wrap" style="margin-top: 12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Used By</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="invites-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
 
     <section class="card">
       <div class="top" style="margin-bottom: 10px;">
         <strong>Clients</strong>
-        <button id="refresh-btn">Refresh</button>
+        <span class="muted">Runtime data updates automatically</span>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>ID</th>
-            <th>VPN IP</th>
-            <th>Status</th>
-            <th>Traffic</th>
-            <th>Last Seen</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="clients-body"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>ID</th>
+              <th>VPN IP</th>
+              <th>Enabled</th>
+              <th>Online</th>
+              <th>Traffic</th>
+              <th>Last Seen</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="clients-body"></tbody>
+        </table>
+      </div>
     </section>
   </div>
 
@@ -244,9 +313,15 @@
   <script>
     const statusEl = document.getElementById('status');
     const clientsBody = document.getElementById('clients-body');
+    const invitesBody = document.getElementById('invites-body');
     const qrModal = document.getElementById('qr-modal');
     const qrImage = document.getElementById('qr-image');
     const keyText = document.getElementById('key-text');
+    const inviteCodeOut = document.getElementById('invite-code-out');
+
+    const statTotal = document.getElementById('stat-total');
+    const statEnabled = document.getElementById('stat-enabled');
+    const statOnline = document.getElementById('stat-online');
 
     function setStatus(text, cls = '') {
       statusEl.textContent = text;
@@ -297,6 +372,16 @@
       return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
     }
 
+    function fmtAgo(seconds) {
+      if (seconds === null || seconds === undefined) return 'never';
+      const n = Number(seconds);
+      if (!Number.isFinite(n)) return 'never';
+      if (n < 60) return `${n}s ago`;
+      if (n < 3600) return `${Math.floor(n / 60)}m ago`;
+      if (n < 86400) return `${Math.floor(n / 3600)}h ago`;
+      return `${Math.floor(n / 86400)}d ago`;
+    }
+
     function esc(text) {
       return String(text)
         .replace(/&/g, '&amp;')
@@ -306,39 +391,84 @@
         .replace(/'/g, '&#39;');
     }
 
+    function normalizeId(id) {
+      return String(id || '').replace(/'/g, "\\'");
+    }
+
     async function loadClients() {
       const res = await apiFetch('/api/clients');
       const clients = await res.json();
 
       if (!Array.isArray(clients) || clients.length === 0) {
-        clientsBody.innerHTML = '<tr><td colspan="7" class="muted">No clients yet.</td></tr>';
+        statTotal.textContent = '0';
+        statEnabled.textContent = '0';
+        statOnline.textContent = '0';
+        clientsBody.innerHTML = '<tr><td colspan="8" class="muted">No clients yet.</td></tr>';
         return;
       }
 
+      const total = clients.length;
+      const enabled = clients.filter((c) => c.enabled).length;
+      const online = clients.filter((c) => c.online).length;
+      statTotal.textContent = String(total);
+      statEnabled.textContent = String(enabled);
+      statOnline.textContent = String(online);
+
       clientsBody.innerHTML = clients.map((c) => {
-        const statusClass = c.enabled ? 'on' : 'off';
-        const statusText = c.enabled ? 'enabled' : 'disabled';
+        const enabledClass = c.enabled ? 'on' : 'off';
+        const enabledText = c.enabled ? 'enabled' : 'disabled';
+        const onlineClass = c.online ? 'on' : 'off';
+        const onlineText = c.online ? 'online' : 'offline';
         const traffic = `${fmtBytes(c.bytes_out)} ↑ / ${fmtBytes(c.bytes_in)} ↓`;
-        const lastSeen = c.last_connected || 'never';
+        const lastSeen = fmtAgo(c.last_seen_seconds);
+        const id = normalizeId(c.id);
 
         return `
           <tr>
             <td>${esc(c.name)}</td>
             <td><code>${esc(c.id)}</code></td>
             <td>${esc(c.vpn_ip)}</td>
-            <td><span class="badge ${statusClass}">${statusText}</span></td>
+            <td><span class="badge ${enabledClass}">${enabledText}</span></td>
+            <td><span class="badge ${onlineClass}">${onlineText}</span></td>
             <td>${esc(traffic)}</td>
             <td>${esc(lastSeen)}</td>
             <td>
               <div class="actions">
-                <button onclick="showKey('${esc(c.id)}')">Key</button>
-                <button onclick="showQr('${esc(c.id)}')">QR</button>
+                <button onclick="showKey('${id}')">Key</button>
+                <button onclick="showQr('${id}')">QR</button>
                 ${c.enabled
-                  ? `<button class="danger" onclick="toggleClient('${esc(c.id)}', false)">Disable</button>`
-                  : `<button class="ok" onclick="toggleClient('${esc(c.id)}', true)">Enable</button>`}
-                <button class="danger" onclick="deleteClient('${esc(c.id)}')">Delete</button>
+                  ? `<button class="danger" onclick="toggleClient('${id}', false)">Disable</button>`
+                  : `<button class="ok" onclick="toggleClient('${id}', true)">Enable</button>`}
+                <button class="danger" onclick="deleteClient('${id}')">Delete</button>
               </div>
             </td>
+          </tr>`;
+      }).join('');
+    }
+
+    async function loadInvites() {
+      const res = await apiFetch('/api/invites');
+      const invites = await res.json();
+
+      if (!Array.isArray(invites) || invites.length === 0) {
+        invitesBody.innerHTML = '<tr><td colspan="4" class="muted">No invites yet.</td></tr>';
+        return;
+      }
+
+      invitesBody.innerHTML = invites.map((row) => {
+        const status = String(row.status || '').toLowerCase();
+        const statusClass = ['active', 'used', 'revoked'].includes(status) ? status : 'revoked';
+        const usedBy = row.used_by_tg_id ? String(row.used_by_tg_id) : '-';
+        const revokeBtn = status === 'active'
+          ? `<button class="danger" onclick="revokeInvite('${normalizeId(row.id)}')">Revoke</button>`
+          : '<span class="muted">—</span>';
+
+        return `
+          <tr>
+            <td><code>${esc(row.id)}</code></td>
+            <td><span class="badge ${statusClass}">${esc(status)}</span></td>
+            <td>${esc(usedBy)}</td>
+            <td>${revokeBtn}</td>
           </tr>`;
       }).join('');
     }
@@ -394,6 +524,32 @@
       const failed = (data.failed || []).length;
       setStatus(`Bulk done: created ${created}, failed ${failed}`, failed ? 'error' : 'ok');
       await loadClients();
+    }
+
+    async function createInvite() {
+      const res = await apiFetch('/api/invites', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Invite create failed', 'error');
+        return;
+      }
+
+      inviteCodeOut.value = data.code || '';
+      setStatus('Invite created', 'ok');
+      await loadInvites();
+    }
+
+    async function revokeInvite(id) {
+      if (!confirm(`Revoke invite ${id}?`)) return;
+      const res = await apiFetch(`/api/invites/${id}/revoke`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.error || 'Invite revoke failed', 'error');
+        return;
+      }
+
+      setStatus(data.message || 'Invite revoked', 'ok');
+      await loadInvites();
     }
 
     async function toggleClient(id, enable) {
@@ -464,9 +620,16 @@
       setStatus('Logout failed', 'error');
     }
 
-    document.getElementById('refresh-btn').addEventListener('click', () => loadClients());
+    async function refreshAll() {
+      await Promise.all([loadClients(), loadInvites()]);
+    }
+
+    document.getElementById('refresh-btn').addEventListener('click', () => {
+      refreshAll().catch((e) => setStatus(e.message || 'Refresh failed', 'error'));
+    });
     document.getElementById('create-btn').addEventListener('click', () => createClient());
     document.getElementById('bulk-btn').addEventListener('click', () => bulkCreate());
+    document.getElementById('create-invite-btn').addEventListener('click', () => createInvite());
     document.getElementById('logout-btn').addEventListener('click', () => logout());
     document.getElementById('close-modal').addEventListener('click', () => qrModal.classList.remove('open'));
     document.getElementById('copy-key').addEventListener('click', async () => {
@@ -479,7 +642,16 @@
       if (event.target === qrModal) qrModal.classList.remove('open');
     });
 
-    loadClients().catch((e) => setStatus(e.message || 'Failed to load clients', 'error'));
+    refreshAll().catch((e) => setStatus(e.message || 'Initial load failed', 'error'));
+    setInterval(() => {
+      refreshAll().catch((e) => setStatus(e.message || 'Auto refresh failed', 'error'));
+    }, 5000);
+
+    window.toggleClient = toggleClient;
+    window.deleteClient = deleteClient;
+    window.showKey = showKey;
+    window.showQr = showQr;
+    window.revokeInvite = revokeInvite;
   </script>
 </body>
 </html>

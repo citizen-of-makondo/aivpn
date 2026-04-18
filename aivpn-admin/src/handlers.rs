@@ -9,6 +9,7 @@ use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
+use chrono::Utc;
 use qrcode::render::svg;
 use qrcode::QrCode;
 use subtle::ConstantTimeEq;
@@ -20,7 +21,8 @@ use crate::auth::{
 };
 use crate::models::{
     BulkCreateFailure, BulkCreateRequest, BulkCreateResponse, ClientResponse,
-    ConnectionKeyResponse, CreateClientRequest, ErrorResponse, LoginRequest, MessageResponse,
+    ConnectionKeyResponse, CreateClientRequest, CreateInviteResponse, ErrorResponse, InviteResponse,
+    LoginRequest, MessageResponse,
 };
 use crate::state::AppState;
 use crate::templates::{DashboardTemplate, LoginTemplate};
@@ -139,7 +141,7 @@ pub async fn api_list_clients(
         .client_db
         .list_clients()
         .into_iter()
-        .map(ClientResponse::from)
+        .map(build_client_response)
         .collect::<Vec<_>>();
 
     Ok(Json(clients))
@@ -165,7 +167,7 @@ pub async fn api_create_client(
             state
                 .audit
                 .log("client_create", &claims.user, Some(&client.id), addr.ip(), true, "ok");
-            Ok(Json(ClientResponse::from(client)))
+            Ok(Json(build_client_response(client)))
         }
         Err(e) => {
             state.audit.log(
@@ -211,7 +213,7 @@ pub async fn api_bulk_create_clients(
     for offset in 0..req.count {
         let name = format!("{prefix}{}", start + offset);
         match state.client_db.add_client(&name) {
-            Ok(client) => created.push(ClientResponse::from(client)),
+            Ok(client) => created.push(build_client_response(client)),
             Err(e) => failed.push(BulkCreateFailure {
                 name,
                 error: e.to_string(),
@@ -243,7 +245,7 @@ pub async fn api_get_client(
         .find_by_id(&id)
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Client not found"))?;
 
-    Ok(Json(ClientResponse::from(client)))
+    Ok(Json(build_client_response(client)))
 }
 
 pub async fn api_enable_client(
@@ -425,6 +427,76 @@ pub async fn api_get_connection_qr(
     ))
 }
 
+pub async fn api_list_invites(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+) -> Result<Json<Vec<InviteResponse>>, ApiError> {
+    let _claims = require_api_auth(&state, &jar)?;
+    let invites = state
+        .invite_store
+        .list()
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    let rows = invites.into_iter().map(InviteResponse::from).collect::<Vec<_>>();
+    Ok(Json(rows))
+}
+
+pub async fn api_create_invite(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<Json<CreateInviteResponse>, ApiError> {
+    let claims = require_api_auth(&state, &jar)?;
+    require_mutation_allowed(&state, addr.ip(), &jar, &headers)?;
+
+    let created = state
+        .invite_store
+        .create_invite()
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+
+    state.audit.log(
+        "invite_create",
+        &claims.user,
+        Some(&created.record.id),
+        addr.ip(),
+        true,
+        "ok",
+    );
+
+    Ok(Json(CreateInviteResponse {
+        invite: InviteResponse::from(created.record),
+        code: created.code,
+    }))
+}
+
+pub async fn api_revoke_invite(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let claims = require_api_auth(&state, &jar)?;
+    require_mutation_allowed(&state, addr.ip(), &jar, &headers)?;
+
+    match state.invite_store.revoke_invite(&id) {
+        Ok(_) => {
+            state
+                .audit
+                .log("invite_revoke", &claims.user, Some(&id), addr.ip(), true, "ok");
+            Ok(Json(MessageResponse {
+                message: "Invite revoked".to_string(),
+            }))
+        }
+        Err(e) => {
+            state
+                .audit
+                .log("invite_revoke", &claims.user, Some(&id), addr.ip(), false, &e);
+            Err(api_error(StatusCode::BAD_REQUEST, &e))
+        }
+    }
+}
+
 fn require_mutation_allowed(
     state: &AppState,
     ip: IpAddr,
@@ -506,6 +578,10 @@ fn api_error(status: StatusCode, message: &str) -> ApiError {
             error: message.to_string(),
         }),
     )
+}
+
+fn build_client_response(client: aivpn_server::client_db::ClientConfig) -> ClientResponse {
+    ClientResponse::from_client(client, Utc::now())
 }
 
 fn build_connection_key(

@@ -1,3 +1,9 @@
+use aivpn_common::client_wire::{
+    build_inner_packet, build_zero_mdh_packet, decode_packet_with_mdh_len,
+    obfuscate_client_eph_pub, RecvWindow, DEFAULT_ZERO_MDH,
+};
+use aivpn_common::crypto::{derive_session_keys, KeyPair, SessionKeys};
+use aivpn_common::protocol::{ControlPayload, InnerType};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use serde::Deserialize;
@@ -46,9 +52,15 @@ impl Default for AivpnBytes {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct AivpnSession {
-    _parsed_key: ParsedKey,
+    parsed_key: ParsedKey,
+    keypair: KeyPair,
+    server_public_key: [u8; 32],
+    keys: SessionKeys,
+    recv_window: RecvWindow,
+    send_counter: u64,
+    send_seq: u16,
+    mdh_len: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +141,16 @@ fn validate_key_material_b64(value: &str, field_name: &str) -> Result<(), String
     Ok(())
 }
 
+fn decode_32_b64(value: &str, field_name: &str) -> Result<[u8; 32], String> {
+    validate_key_material_b64(value, field_name)?;
+    let decoded = STANDARD
+        .decode(value)
+        .map_err(|_| format!("{field_name} is not valid base64"))?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
 fn parse_key_string(raw: &str) -> Result<ParsedKey, String> {
     let normalized = raw.trim();
     if normalized.is_empty() {
@@ -147,8 +169,8 @@ fn parse_key_string(raw: &str) -> Result<ParsedKey, String> {
         .decode(payload)
         .map_err(|_| "connection key payload is not valid base64url".to_string())?;
 
-    let parsed: ParsedKey =
-        serde_json::from_slice(&json_bytes).map_err(|_| "connection key JSON is invalid".to_string())?;
+    let parsed: ParsedKey = serde_json::from_slice(&json_bytes)
+        .map_err(|_| "connection key JSON is invalid".to_string())?;
 
     if parsed.s.trim().is_empty() {
         return Err("connection key field \"s\" is required".to_string());
@@ -170,12 +192,26 @@ fn parse_key_string(raw: &str) -> Result<ParsedKey, String> {
     Ok(parsed)
 }
 
-fn set_not_implemented(out_error: *mut *mut c_char, function_name: &str) -> c_int {
-    set_error(
-        out_error,
-        &format!("{function_name} is not implemented in phase 3"),
-    );
-    AIVPN_ERR_NOT_IMPLEMENTED
+fn packet_from_raw(packet: *const u8, packet_len: usize) -> Result<Vec<u8>, String> {
+    if packet.is_null() || packet_len == 0 {
+        return Err("packet must be non-null and packet_len must be > 0".to_string());
+    }
+    let slice = unsafe { std::slice::from_raw_parts(packet, packet_len) };
+    Ok(slice.to_vec())
+}
+
+fn set_out_bytes(out_packet: *mut AivpnBytes, data: Vec<u8>) {
+    let mut bytes = data;
+    let raw = AivpnBytes {
+        ptr: bytes.as_mut_ptr(),
+        len: bytes.len(),
+        cap: bytes.capacity(),
+    };
+    std::mem::forget(bytes);
+
+    unsafe {
+        *out_packet = raw;
+    }
 }
 
 #[no_mangle]
@@ -259,7 +295,8 @@ pub extern "C" fn aivpn_parse_key(
         }
     };
 
-    let psk_b64 = if let Some(psk) = parsed.p.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+    let psk_b64 = if let Some(psk) = parsed.p.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty())
+    {
         match clone_c_string(psk) {
             Ok(value) => value,
             Err(code) => {
@@ -330,22 +367,25 @@ pub extern "C" fn aivpn_session_create(
         }
     };
 
-    if let Err(error) = validate_key_material_b64(&server_key_b64, "\"k\" (server key)") {
-        set_error(out_error, &error);
-        return ptr::null_mut();
-    }
+    let server_public_key = match decode_32_b64(&server_key_b64, "\"k\" (server key)") {
+        Ok(v) => v,
+        Err(error) => {
+            set_error(out_error, &error);
+            return ptr::null_mut();
+        }
+    };
 
-    let psk_b64 = if parsed_ref.psk_b64.is_null() {
+    let psk_bytes = if parsed_ref.psk_b64.is_null() {
         None
     } else {
         match parse_c_string(parsed_ref.psk_b64, "parsed_key.psk_b64") {
-            Ok(value) => {
-                if let Err(error) = validate_key_material_b64(&value, "\"p\" (preshared key)") {
+            Ok(value) => match decode_32_b64(&value, "\"p\" (preshared key)") {
+                Ok(v) => Some(v),
+                Err(error) => {
                     set_error(out_error, &error);
                     return ptr::null_mut();
                 }
-                Some(value)
-            }
+            },
             Err(error) => {
                 set_error(out_error, &error);
                 return ptr::null_mut();
@@ -353,14 +393,33 @@ pub extern "C" fn aivpn_session_create(
         }
     };
 
+    let keypair = KeyPair::generate();
+    let dh = match keypair.compute_shared(&server_public_key) {
+        Ok(v) => v,
+        Err(error) => {
+            set_error(out_error, &format!("failed to derive shared key: {error}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let keys = derive_session_keys(&dh, psk_bytes.as_ref(), &keypair.public_key_bytes());
+
     let session = AivpnSession {
-        _parsed_key: ParsedKey {
+        parsed_key: ParsedKey {
             s: server,
             k: server_key_b64,
-            p: psk_b64,
+            p: psk_bytes.as_ref().map(|v| STANDARD.encode(v)),
             i: client_ip,
         },
+        keypair,
+        server_public_key,
+        keys,
+        recv_window: RecvWindow::new(),
+        send_counter: 0,
+        send_seq: 0,
+        mdh_len: DEFAULT_ZERO_MDH.len(),
     };
+
     Box::into_raw(Box::new(session))
 }
 
@@ -381,14 +440,45 @@ pub extern "C" fn aivpn_session_build_init(
     out_error: *mut *mut c_char,
 ) -> c_int {
     clear_error(out_error);
+
     if session.is_null() || out_packet.is_null() {
         set_error(out_error, "session and out_packet must be non-null");
         return AIVPN_ERR_NULL_POINTER;
     }
+
     unsafe {
         *out_packet = AivpnBytes::default();
     }
-    set_not_implemented(out_error, "aivpn_session_build_init")
+
+    let session_ref = unsafe { &mut *session };
+
+    let keepalive = match ControlPayload::Keepalive.encode() {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to encode keepalive: {e}"));
+            return AIVPN_ERR_INTERNAL;
+        }
+    };
+
+    let inner = build_inner_packet(InnerType::Control, session_ref.send_seq, &keepalive);
+    let obf_pub = obfuscate_client_eph_pub(&session_ref.keypair, &session_ref.server_public_key);
+
+    let packet = match build_zero_mdh_packet(
+        &session_ref.keys,
+        &mut session_ref.send_counter,
+        &inner,
+        Some(&obf_pub),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to build init packet: {e}"));
+            return AIVPN_ERR_INTERNAL;
+        }
+    };
+
+    session_ref.send_seq = session_ref.send_seq.wrapping_add(1);
+    set_out_bytes(out_packet, packet);
+    AIVPN_OK
 }
 
 #[no_mangle]
@@ -400,18 +490,42 @@ pub extern "C" fn aivpn_session_encrypt_packet(
     out_error: *mut *mut c_char,
 ) -> c_int {
     clear_error(out_error);
+
     if session.is_null() || out_packet.is_null() {
         set_error(out_error, "session and out_packet must be non-null");
         return AIVPN_ERR_NULL_POINTER;
     }
-    if packet.is_null() || packet_len == 0 {
-        set_error(out_error, "packet must be non-null and packet_len must be > 0");
-        return AIVPN_ERR_INVALID_FORMAT;
-    }
+
     unsafe {
         *out_packet = AivpnBytes::default();
     }
-    set_not_implemented(out_error, "aivpn_session_encrypt_packet")
+
+    let payload = match packet_from_raw(packet, packet_len) {
+        Ok(v) => v,
+        Err(error) => {
+            set_error(out_error, &error);
+            return AIVPN_ERR_INVALID_FORMAT;
+        }
+    };
+
+    let session_ref = unsafe { &mut *session };
+    let inner = build_inner_packet(InnerType::Data, session_ref.send_seq, &payload);
+    let datagram = match build_zero_mdh_packet(
+        &session_ref.keys,
+        &mut session_ref.send_counter,
+        &inner,
+        None,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to encrypt packet: {e}"));
+            return AIVPN_ERR_INTERNAL;
+        }
+    };
+
+    session_ref.send_seq = session_ref.send_seq.wrapping_add(1);
+    set_out_bytes(out_packet, datagram);
+    AIVPN_OK
 }
 
 #[no_mangle]
@@ -423,18 +537,70 @@ pub extern "C" fn aivpn_session_decrypt_packet(
     out_error: *mut *mut c_char,
 ) -> c_int {
     clear_error(out_error);
+
     if session.is_null() || out_packet.is_null() {
         set_error(out_error, "session and out_packet must be non-null");
         return AIVPN_ERR_NULL_POINTER;
     }
-    if packet.is_null() || packet_len == 0 {
-        set_error(out_error, "packet must be non-null and packet_len must be > 0");
-        return AIVPN_ERR_INVALID_FORMAT;
-    }
+
     unsafe {
         *out_packet = AivpnBytes::default();
     }
-    set_not_implemented(out_error, "aivpn_session_decrypt_packet")
+
+    let datagram = match packet_from_raw(packet, packet_len) {
+        Ok(v) => v,
+        Err(error) => {
+            set_error(out_error, &error);
+            return AIVPN_ERR_INVALID_FORMAT;
+        }
+    };
+
+    let session_ref = unsafe { &mut *session };
+    let decoded = match decode_packet_with_mdh_len(
+        &datagram,
+        &session_ref.keys,
+        &mut session_ref.recv_window,
+        session_ref.mdh_len,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to decrypt packet: {e}"));
+            return AIVPN_ERR_INVALID_FORMAT;
+        }
+    };
+
+    match decoded.header.inner_type {
+        InnerType::Data => {
+            set_out_bytes(out_packet, decoded.payload);
+            AIVPN_OK
+        }
+        InnerType::Control => {
+            if let Ok(ControlPayload::ServerHello { server_eph_pub, .. }) =
+                ControlPayload::decode(&decoded.payload)
+            {
+                let dh2 = match session_ref.keypair.compute_shared(&server_eph_pub) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        set_error(out_error, &format!("failed to process ServerHello DH: {e}"));
+                        return AIVPN_ERR_INTERNAL;
+                    }
+                };
+
+                let old_session_key = session_ref.keys.session_key;
+                session_ref.keys =
+                    derive_session_keys(&dh2, Some(&old_session_key), &session_ref.keypair.public_key_bytes());
+                session_ref.send_counter = 0;
+                session_ref.recv_window.reset();
+            }
+
+            set_out_bytes(out_packet, Vec::new());
+            AIVPN_OK
+        }
+        _ => {
+            set_out_bytes(out_packet, decoded.payload);
+            AIVPN_OK
+        }
+    }
 }
 
 #[no_mangle]
@@ -444,19 +610,49 @@ pub extern "C" fn aivpn_session_build_keepalive(
     out_error: *mut *mut c_char,
 ) -> c_int {
     clear_error(out_error);
+
     if session.is_null() || out_packet.is_null() {
         set_error(out_error, "session and out_packet must be non-null");
         return AIVPN_ERR_NULL_POINTER;
     }
+
     unsafe {
         *out_packet = AivpnBytes::default();
     }
-    set_not_implemented(out_error, "aivpn_session_build_keepalive")
+
+    let session_ref = unsafe { &mut *session };
+    let keepalive = match ControlPayload::Keepalive.encode() {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to encode keepalive: {e}"));
+            return AIVPN_ERR_INTERNAL;
+        }
+    };
+
+    let inner = build_inner_packet(InnerType::Control, session_ref.send_seq, &keepalive);
+    let datagram = match build_zero_mdh_packet(
+        &session_ref.keys,
+        &mut session_ref.send_counter,
+        &inner,
+        None,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            set_error(out_error, &format!("failed to build keepalive packet: {e}"));
+            return AIVPN_ERR_INTERNAL;
+        }
+    };
+
+    session_ref.send_seq = session_ref.send_seq.wrapping_add(1);
+    set_out_bytes(out_packet, datagram);
+    AIVPN_OK
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivpn_common::client_wire::counter_to_nonce;
+    use aivpn_common::crypto::{decrypt_payload, encrypt_payload};
 
     fn make_valid_key() -> String {
         let json = r#"{"s":"194.154.25.21:443","k":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=","p":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","i":"10.0.0.2"}"#;
@@ -475,5 +671,21 @@ mod tests {
     fn parse_invalid_key_fails() {
         let raw = "aivpn://invalid";
         assert!(parse_key_string(raw).is_err());
+    }
+
+    #[test]
+    fn nonce_counter_roundtrip() {
+        let nonce = counter_to_nonce(42);
+        assert_eq!(u64::from_le_bytes(nonce[..8].try_into().unwrap()), 42);
+    }
+
+    #[test]
+    fn payload_encrypt_decrypt_roundtrip() {
+        let key = [7u8; 32];
+        let nonce = counter_to_nonce(1);
+        let plain = b"hello";
+        let enc = encrypt_payload(&key, &nonce, plain).unwrap();
+        let dec = decrypt_payload(&key, &nonce, &enc).unwrap();
+        assert_eq!(dec, plain);
     }
 }

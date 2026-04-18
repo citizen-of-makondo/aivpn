@@ -31,6 +31,24 @@ services:
     networks:
       - admin_net
 
+  aivpn-telegram-bot:
+    build:
+      context: .
+      dockerfile: aivpn-telegram-bot/Dockerfile
+    image: aivpn-telegram-bot:latest
+    restart: unless-stopped
+    env_file:
+      - ./config/admin.env
+    volumes:
+      - ./config:/etc/aivpn
+    networks:
+      - admin_net
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$(basename $(readlink /proc/1/exe 2>/dev/null))\" = \"aivpn-telegram-bot\" || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
 volumes:
   caddy_data:
   caddy_config:

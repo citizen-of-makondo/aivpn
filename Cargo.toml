@@ -5,6 +5,7 @@ members = [
     "aivpn-server",
     "aivpn-android-core",
     "aivpn-admin",
+    "aivpn-telegram-bot",
     "aivpn-windows",
 ]
 default-members = [

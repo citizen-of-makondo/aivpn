@@ -361,6 +361,9 @@ Features:
 - list/create/bulk create clients
 - enable/disable/delete clients
 - show `aivpn://` key and QR per client
+- runtime client fields: `online`, `last_seen_seconds` (5s auto-refresh on dashboard)
+- single-use invite management: create/list/revoke
+- Telegram bot service (`aivpn-telegram-bot`) for invite-based key issuing
 
 Quick start:
 
@@ -371,14 +374,16 @@ cp config/admin.env.example config/admin.env
 # 2) edit required variables in config/admin.env:
 #    AIVPN_SERVER_ADDR, AIVPN_ADMIN_USER,
 #    AIVPN_ADMIN_PASSWORD_HASH, AIVPN_SESSION_SECRET,
-#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL
+#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL,
+#    AIVPN_TG_BOT_TOKEN
 #    (for AIVPN_ADMIN_PASSWORD_HASH in compose env file, escape '$' as '$$')
 
-# 3) start admin backend + HTTPS reverse proxy (Caddy)
+# 3) start admin backend + HTTPS reverse proxy (Caddy) + Telegram bot
 docker compose -f docker-compose.admin.yml up -d --build
 ```
 
 The admin backend listens on internal port `8081`; only Caddy is public (`80/443`).
+For dashboard runtime freshness tuning, set server env `AIVPN_STATS_FLUSH_INTERVAL_SECS` (default `10`).
 
 More details:
 

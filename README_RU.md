@@ -351,6 +351,9 @@ Admin v1 работает как отдельный сервис (`aivpn-admin`)
 - список клиентов, создание, bulk создание
 - enable/disable/delete клиента
 - показ `aivpn://` ключа и QR по каждому клиенту
+- runtime-поля в списке клиентов: `online`, `last_seen_seconds` (автообновление каждые 5s)
+- управление invite-кодами (`single-use`): create/list/revoke
+- Telegram bot (`aivpn-telegram-bot`) для выдачи ключей по invite
 
 Быстрый запуск:
 
@@ -361,14 +364,17 @@ cp config/admin.env.example config/admin.env
 # 2) заполнить обязательные переменные в config/admin.env:
 #    AIVPN_SERVER_ADDR, AIVPN_ADMIN_USER,
 #    AIVPN_ADMIN_PASSWORD_HASH, AIVPN_SESSION_SECRET,
-#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL
+#    AIVPN_ADMIN_DOMAIN, AIVPN_ADMIN_EMAIL,
+#    AIVPN_TG_BOT_TOKEN
 #    (для AIVPN_ADMIN_PASSWORD_HASH в compose env-файле символ '$' нужно писать как '$$')
 
-# 3) поднять backend админки + HTTPS reverse proxy (Caddy)
+# 3) поднять backend админки + HTTPS reverse proxy (Caddy) + Telegram bot
 docker compose -f docker-compose.admin.yml up -d --build
 ```
 
 `aivpn-admin` слушает внутренний порт `8081`, наружу публикуется только Caddy (`80/443`).
+Чтобы runtime-статистика в админке обновлялась быстрее/медленнее, на стороне сервера регулируйте
+`AIVPN_STATS_FLUSH_INTERVAL_SECS` (по умолчанию `10`).
 
 Подробнее:
 

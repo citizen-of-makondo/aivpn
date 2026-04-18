@@ -21,6 +21,7 @@ services:
     environment:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
+      - AIVPN_STATS_FLUSH_INTERVAL_SECS=${AIVPN_STATS_FLUSH_INTERVAL_SECS:-10}
     volumes:
       - ./config:/etc/aivpn
     logging:

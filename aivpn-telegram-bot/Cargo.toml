@@ -1,35 +1,30 @@
 [package]
-name = "aivpn-admin"
+name = "aivpn-telegram-bot"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "aivpn-admin"
+name = "aivpn-telegram-bot"
 path = "src/main.rs"
 
 [dependencies]
 aivpn-server = { path = "../aivpn-server" }
 aivpn-common = { path = "../aivpn-common" }
 
-axum = { version = "0.7", features = ["macros", "json"] }
-axum-extra = { version = "0.9", features = ["cookie"] }
-askama = "0.12"
+teloxide = { version = "0.13", features = ["macros", "ctrlc_handler"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true
-rand.workspace = true
 chrono.workspace = true
+rand.workspace = true
 base64 = "0.22"
-argon2 = "0.5"
-hmac = "0.12"
 sha2 = "0.10"
-subtle.workspace = true
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 hex = "0.4"
-time = { version = "=0.3.36", features = ["formatting"] }
-tower-http = { version = "0.5", features = ["trace"] }
 fs2 = "0.4"
+qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+dashmap = "5.5"
