@@ -14,6 +14,9 @@ PKG_BUILD="$BUILD_DIR/pkg"
 PKG_ROOT="$PKG_BUILD/root"
 PKG_SCRIPTS="$PKG_BUILD/scripts"
 
+APP_VERSION="$(awk -F'"' '/^\[workspace.package\]/{flag=1; next} flag && /^version = /{print $2; exit}' "$PROJECT_DIR/Cargo.toml")"
+APP_BUILD_NUMBER="${AIVPN_BUILD_NUMBER:-$(echo "$APP_VERSION" | awk -F. '{ printf "%d%02d%02d", $1, $2, $3 }')}"
+
 SWIFT_SOURCES=(
     "$SCRIPT_DIR/AivpnApp.swift"
     "$SCRIPT_DIR/ContentView.swift"
@@ -27,7 +30,7 @@ HELPER_SOURCES=(
     "$SCRIPT_DIR/aivpn-helper/main.swift"
 )
 
-echo "🔨 Building AIVPN macOS v0.3.0 (Universal Binary + PKG)..."
+echo "🔨 Building AIVPN macOS v$APP_VERSION (Universal Binary + PKG)..."
 
 # ──────────────────────────────────────────────
 # Clean
@@ -129,7 +132,8 @@ chmod 644 "$PKG_ROOT/Library/LaunchDaemons/com.aivpn.helper.plist"
 # Bundle aivpn-client binary into app
 # ──────────────────────────────────────────────
 echo "📦 Bundling aivpn-client binary..."
-CLIENT_BIN_UNIVERSAL="$PROJECT_DIR/releases/aivpn-client-universal"
+CLIENT_BIN_MACOS_UNIVERSAL="$PROJECT_DIR/releases/aivpn-client-macos-universal"
+CLIENT_BIN_UNIVERSAL_LEGACY="$PROJECT_DIR/releases/aivpn-client-universal"
 CLIENT_BIN_X86="$PROJECT_DIR/target/release/aivpn-client"
 CLIENT_BIN_ARM="$PROJECT_DIR/target/aarch64-apple-darwin/release/aivpn-client"
 
@@ -142,10 +146,14 @@ elif [ -f "$CLIENT_BIN_X86" ]; then
     cp "$CLIENT_BIN_X86" "$RESOURCES/aivpn-client"
     chmod +x "$RESOURCES/aivpn-client"
     echo "  ⚠️  aivpn-client bundled (x86_64 only)"
-elif [ -f "$CLIENT_BIN_UNIVERSAL" ]; then
-    cp "$CLIENT_BIN_UNIVERSAL" "$RESOURCES/aivpn-client"
+elif [ -f "$CLIENT_BIN_MACOS_UNIVERSAL" ]; then
+    cp "$CLIENT_BIN_MACOS_UNIVERSAL" "$RESOURCES/aivpn-client"
     chmod +x "$RESOURCES/aivpn-client"
-    echo "  ⚠️  aivpn-client bundled from fallback universal artifact"
+    echo "  ⚠️  aivpn-client bundled from macOS universal artifact"
+elif [ -f "$CLIENT_BIN_UNIVERSAL_LEGACY" ]; then
+    cp "$CLIENT_BIN_UNIVERSAL_LEGACY" "$RESOURCES/aivpn-client"
+    chmod +x "$RESOURCES/aivpn-client"
+    echo "  ⚠️  aivpn-client bundled from legacy universal artifact"
 else
     echo "  ⚠️  aivpn-client not found"
     echo "  Run 'cargo build --release --bin aivpn-client' first"
@@ -155,6 +163,8 @@ fi
 # Copy Info.plist
 # ──────────────────────────────────────────────
 cp "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$CONTENTS/Info.plist"
 
 # ──────────────────────────────────────────────
 # Copy app icon
@@ -236,22 +246,38 @@ pkgbuild \
     --install-location "/" \
     --scripts "$PKG_SCRIPTS" \
     --identifier "com.aivpn.client" \
-    --version "0.3.0" \
+    --version "$APP_VERSION" \
     --ownership "recommended" \
     "$PKG_OUTPUT"
 
 echo "  ✅ Package created: $PKG_OUTPUT ($(du -sh "$PKG_OUTPUT" | cut -f1))"
 
 # ──────────────────────────────────────────────
-# Also create DMG for manual distribution
+# Also create DMG for guided distribution
 # ──────────────────────────────────────────────
 echo "💿 Creating DMG..."
+Dmg_STAGE="$(mktemp -d /tmp/aivpn-dmg.XXXXXX)"
+Dmg_PKG_NAME="AIVPN Installer.pkg"
+
+cp "$PKG_OUTPUT" "$Dmg_STAGE/$Dmg_PKG_NAME"
+cat > "$Dmg_STAGE/INSTALL.txt" << 'EOF'
+AIVPN installation
+
+1. Open "AIVPN Installer.pkg".
+2. Finish the installer. It installs the app, helper service, and VPN binary.
+3. Launch AIVPN from Applications.
+
+Do not copy the app directly from this disk image.
+The required helper service is installed only by the package installer.
+EOF
+
 DMG_OUTPUT="$PROJECT_DIR/releases/aivpn-macos.dmg"
 hdiutil create \
-    -volname "AIVPN" \
-    -srcfolder "$SIGNED_APP_BUNDLE" \
+    -volname "AIVPN Installer" \
+    -srcfolder "$Dmg_STAGE" \
     -ov -format UDZO \
     "$DMG_OUTPUT"
+rm -rf "$Dmg_STAGE"
 echo "  ✅ DMG created: $DMG_OUTPUT ($(du -sh "$DMG_OUTPUT" | cut -f1))"
 
 echo ""

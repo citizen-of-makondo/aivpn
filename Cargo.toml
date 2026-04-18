@@ -5,6 +5,7 @@ members = [
     "aivpn-server",
     "aivpn-android-core",
     "aivpn-admin",
+    "aivpn-windows",
 ]
 default-members = [
     "aivpn-common",
@@ -15,7 +16,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 authors = ["AIVPN Team"]
@@ -54,3 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 bytes = "1.5"
 chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release.package.aivpn-android-core]
+opt-level = "s"
+strip = true

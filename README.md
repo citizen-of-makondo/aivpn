@@ -29,8 +29,15 @@ No need to compile — download and run:
 | Platform | File | Size | Notes |
 |----------|------|------|-------|
 | **macOS** | [aivpn-macos.dmg](releases/aivpn-macos.dmg) | ~1.8 MB | Menu bar app with RU/EN interface |
-| **Windows** | [aivpn-client.exe](releases/aivpn-client.exe) | ~6.4 MB | Requires [wintun.dll](https://www.wintun.net/) next to the exe |
+| **Linux** | [aivpn-client-linux-x86_64](releases/aivpn-client-linux-x86_64) | ~4.0 MB | Native x86_64 GNU/Linux CLI binary |
+| **Linux ARMv7** | [aivpn-client-linux-armv7-musleabihf](releases/aivpn-client-linux-armv7-musleabihf) | ~4-5 MB | Static musl client binary for ARMv7 servers and SBCs |
+| **Entware / MIPSel** | [aivpn-client-linux-mipsel-musl](releases/aivpn-client-linux-mipsel-musl) | ~4-5 MB | Static musl client binary for Entware-capable routers |
+| **Windows** | [aivpn-windows-package.zip](releases/aivpn-windows-package.zip) | ~7 MB | Includes `aivpn-client.exe` + `wintun.dll` |
 | **Android** | [aivpn-client.apk](releases/aivpn-client.apk) | ~6.5 MB | Install and paste your connection key |
+| **Linux Server** | [aivpn-server-linux-x86_64](releases/aivpn-server-linux-x86_64) | ~4.0 MB | Prebuilt x86_64 GNU/Linux server binary for VPS or fast Docker deploy |
+| **Linux Server ARMv7** | [aivpn-server-linux-armv7-musleabihf](releases/aivpn-server-linux-armv7-musleabihf) | ~4-5 MB | Static musl server binary for ARMv7 Linux hosts |
+| **Linux Server MIPSel** | [aivpn-server-linux-mipsel-musl](releases/aivpn-server-linux-mipsel-musl) | ~4-5 MB | Static musl server binary for lightweight MIPSel/Entware systems |
+
 
 ### Quick Start (macOS)
 1. Download and open `aivpn-macos.dmg`
@@ -38,16 +45,33 @@ No need to compile — download and run:
 3. Launch — the app appears in the menu bar (no dock icon)
 4. Paste your connection key (`aivpn://...`) and click **Connect**
 5. Toggle 🇷🇺/🇬🇧 to switch language
-
 > ⚠️ The VPN client requires root privileges for TUN device. The app will prompt for password via `sudo`.
 
 ### Quick Start (Windows)
-1. Download `aivpn-client.exe` and [wintun.dll](https://www.wintun.net/)
-2. Place both files in the same folder
+1. Download and extract [aivpn-windows-package.zip](releases/aivpn-windows-package.zip)
+2. Ensure `aivpn-client.exe` and `wintun.dll` remain in the same folder
 3. Run **as Administrator** in PowerShell:
    ```powershell
    .\aivpn-client.exe -k "your_connection_key_here"
    ```
+
+### Quick Start (Linux)
+1. Download [aivpn-client-linux-x86_64](releases/aivpn-client-linux-x86_64)
+2. Make it executable and run as root:
+    ```bash
+    chmod +x ./aivpn-client-linux-x86_64
+    sudo ./aivpn-client-linux-x86_64 -k "your_connection_key_here"
+    ```
+
+### Quick Start (Entware Routers)
+1. Download [aivpn-client-linux-mipsel-musl](releases/aivpn-client-linux-mipsel-musl) for MIPSel routers or [aivpn-client-linux-armv7-musleabihf](releases/aivpn-client-linux-armv7-musleabihf) for ARMv7 routers.
+2. Copy the binary to the router, for example into `/opt/bin/aivpn-client`.
+3. Make it executable and run it from Entware shell as root:
+    ```sh
+    chmod +x /opt/bin/aivpn-client
+    /opt/bin/aivpn-client -k "your_connection_key_here"
+    ```
+4. Because these musl builds are statically linked, no Rust toolchain or extra shared libraries are required on the router.
 
 ### Quick Start (Android)
 1. Download and install `aivpn-client.apk`
@@ -129,7 +153,30 @@ The project is split into workspaces: `aivpn-common` (crypto & masks), `aivpn-se
 cargo build --release
 ```
 
-> On Windows, make sure you have [Wintun](https://www.wintun.net/) installed — download `wintun.dll` and place it next to the binary.
+To refresh the Linux server release artifact without installing Rust on the host:
+
+```bash
+./build-server-release.sh
+```
+
+For static musl builds for ARMv7 servers and Entware-class MIPSel routers:
+
+```bash
+./build-musl-release.sh server armv7-unknown-linux-musleabihf
+./build-musl-release.sh server mipsel-unknown-linux-musl
+./build-musl-release.sh client armv7-unknown-linux-musleabihf
+./build-musl-release.sh client mipsel-unknown-linux-musl
+```
+
+To deploy the latest published Linux server release to a VPS in one command:
+
+```bash
+./deploy-server-release.sh
+```
+
+> For GitHub Releases, publish `aivpn-server-linux-x86_64` as the default Linux server asset, keep `aivpn-windows-package.zip` as the primary Windows asset, and attach the musl artifacts `aivpn-server-linux-armv7-musleabihf`, `aivpn-server-linux-mipsel-musl`, `aivpn-client-linux-armv7-musleabihf`, and `aivpn-client-linux-mipsel-musl` for ARM/Entware targets. Raw `aivpn-client.exe` is only safe when `wintun.dll` is shipped next to it.
+
+GitHub Releases automation: the workflow in `.github/workflows/server-release-asset.yml` builds `aivpn-server-linux-x86_64` plus the ARMv7 and MIPSel musl server/client assets on each published Release and uploads them automatically.
 
 ### 3. Server (Linux only)
 
@@ -138,17 +185,47 @@ cargo build --release
 The easiest way — everything is preconfigured in `docker-compose.yml`.
 
 ```bash
+# Pick the Compose command available on your system
+if docker compose version >/dev/null 2>&1; then
+    AIVPN_COMPOSE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    AIVPN_COMPOSE="docker-compose"
+else
+    echo "Install Docker Compose v2 (`docker-compose-v2` or `docker-compose-plugin`) or legacy `docker-compose`."
+    exit 1
+fi
+
 # Generate server key
 mkdir -p config
 openssl rand 32 > config/server.key
 chmod 600 config/server.key
 
 # Enable NAT (required for internet access from VPN)
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
 sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
 
-# Build and start
-docker compose up -d aivpn-server
+# Fast start from the prebuilt Linux release binary
+AIVPN_SERVER_DOCKERFILE=Dockerfile.prebuilt $AIVPN_COMPOSE up -d aivpn-server
+
+# Or keep the original source build path
+$AIVPN_COMPOSE up -d aivpn-server
+```
+
+The fast path expects `releases/aivpn-server-linux-x86_64` to be present locally. Build it with `./build-server-release.sh` or download it from Releases before starting Docker.
+
+For a VPS one-command fast deploy, run `./deploy-server-release.sh`. It downloads the release asset, creates `config/server.key` if needed, enables IPv4 forwarding, adds the NAT rule for the default interface, and starts Docker with `Dockerfile.prebuilt`.
+
+If your firewall is enabled, also allow `443/udp` using the tool your system uses:
+
+```bash
+# UFW (Ubuntu/Debian)
+sudo ufw allow 443/udp
+
+# firewalld (RHEL/CentOS/Fedora)
+sudo firewall-cmd --add-port=443/udp --permanent
+sudo firewall-cmd --reload
 ```
 
 > The container runs with `network_mode: "host"` and mounts `./config` → `/etc/aivpn` inside the container.
@@ -172,8 +249,33 @@ sudo ./target/release/aivpn-server --listen 0.0.0.0:443 --key-file /etc/aivpn/se
 Enable NAT:
 
 ```bash
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
 sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
+```
+
+If you use a VPN subnet other than the legacy `10.0.0.0/24`, keep it in `config/server.json` as the authoritative source:
+
+```json
+{
+    "listen_addr": "0.0.0.0:443",
+    "tun_name": "aivpn0",
+    "network_config": {
+        "server_vpn_ip": "10.150.0.1",
+        "prefix_len": 24,
+        "mtu": 1346
+    }
+}
+```
+
+Then match the NAT rule to that subnet, for example:
+
+```bash
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -C POSTROUTING -s 10.150.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.150.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
 ```
 
 ### 3.1 Client Management
@@ -182,11 +284,14 @@ AIVPN uses a client registration model similar to WireGuard/XRay: each client ge
 
 All config is packed into a single **connection key** — one string that the user pastes into the app or CLI client.
 
+The connection key now carries both the legacy top-level VPN IP field and an optional bootstrap `network_config` block. New clients use server-provided network settings from this block, then confirm them from `ServerHello`. Older keys without `network_config` still work.
+
 #### Docker
 
 ```bash
+# Reuse the same Compose command detected above
 # Add a new client (prints a connection key)
-docker compose exec aivpn-server aivpn-server \
+$AIVPN_COMPOSE exec aivpn-server aivpn-server \
     --add-client "Alice Phone" \
     --key-file /etc/aivpn/server.key \
     --clients-db /etc/aivpn/clients.json \
@@ -199,14 +304,14 @@ docker compose exec aivpn-server aivpn-server \
 #
 # ══ Connection Key (paste into app) ══
 #
-# aivpn://eyJpIjoiMTAuMC4wLjIiLCJrIjoiLi4uIiwicCI6Ii4uLiIsInMiOiIxLjIuMy40OjQ0MyJ9
+# aivpn://eyJpIjoiMTAuMC4wLjIiLCJrIjoiLi4uIiwibiI6eyJjbGllbnRfaXAiOiIxMC4wLjAuMiIsInNlcnZlcl92cG5faXAiOiIxMC4wLjAuMSIsInByZWZpeF9sZW4iOjI0LCJtdHUiOjEzNDZ9LCJwIjoiLi4uIiwicyI6IjEuMi4zLjQ6NDQzIn0
 
 # List all clients with traffic stats
 docker compose exec aivpn-server aivpn-server \
     --list-clients --clients-db /etc/aivpn/clients.json
 
 # Show a specific client (and its connection key)
-docker compose exec aivpn-server aivpn-server \
+$AIVPN_COMPOSE exec aivpn-server aivpn-server \
     --show-client "Alice Phone" \
     --key-file /etc/aivpn/server.key \
     --clients-db /etc/aivpn/clients.json \
@@ -290,6 +395,14 @@ The easiest way — paste the connection key from `--add-client`:
 sudo ./target/release/aivpn-client -k "aivpn://eyJp..."
 ```
 
+Priority on modern clients is:
+
+1. Network settings confirmed by `ServerHello`
+2. Bootstrap `network_config` from the connection key
+3. Legacy fallback `10.0.0.0/24`
+
+Migration note: old clients continue to work with old keys and legacy `/24` defaults, but if you move the server to a different subnet or prefix, clients must be updated and connection keys should be reissued.
+
 Full tunnel:
 
 ```bash
@@ -331,7 +444,9 @@ sudo ./target/release/aivpn-client \
 
 #### Windows
 
-Download `wintun.dll` from [WireGuard/wintun](https://www.wintun.net/) and place it next to the `.exe`:
+Preferred for users: download and extract `releases/aivpn-windows-package.zip`.
+
+If you distribute raw files instead, keep `wintun.dll` next to the `.exe`:
 
 ```
 aivpn-client.exe
@@ -373,6 +488,19 @@ cargo build --release --target x86_64-unknown-linux-gnu
 rustup target add x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 ```
+
+For static musl cross-builds without installing a local cross toolchain, use Docker-backed release builds:
+
+```bash
+./build-musl-release.sh client armv7-unknown-linux-musleabihf
+./build-musl-release.sh client mipsel-unknown-linux-musl
+./build-musl-release.sh server armv7-unknown-linux-musleabihf
+./build-musl-release.sh server mipsel-unknown-linux-musl
+```
+
+These artifacts are intended for ARM Linux servers/SBCs and Entware-capable MIPSel routers.
+
+For Entware routers, the usual flow is: build or download the musl artifact, copy it into `/opt/bin`, `chmod +x`, and run it directly from the router shell.
 
 ## Project Structure
 

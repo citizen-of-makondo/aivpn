@@ -17,9 +17,9 @@ use tracing::info;
 
 use aivpn_common::crypto::{
     self, SessionKeys, KeyPair, TAG_SIZE, X25519_PUBLIC_KEY_SIZE, 
-    NONCE_SIZE, CHACHA20_KEY_SIZE, DEFAULT_WINDOW_MS,
+    NONCE_SIZE, DEFAULT_WINDOW_MS,
 };
-use aivpn_common::protocol::{InnerType, InnerHeader, ControlPayload, ControlSubtype};
+use aivpn_common::protocol::{InnerType, InnerHeader, ControlPayload};
 use aivpn_common::mask::MaskProfile;
 use aivpn_common::error::{Error, Result};
 
@@ -106,6 +106,7 @@ pub struct Session {
 
 /// 256-bit bitmap for tracking received packets
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(non_camel_case_types)]
 pub struct u256 {
     lo: u128,
     hi: u128,
@@ -326,7 +327,7 @@ impl Session {
     pub fn update_fsm(&mut self) {
         if let Some(mask) = &self.mask {
             let duration_ms = self.fsm_state_start.elapsed().as_millis() as u64;
-            let (new_state, size_override, iat_override, padding_override) = 
+            let (new_state, _size_override, _iat_override, _padding_override) = 
                 mask.process_transition(self.fsm_state, self.fsm_packets, duration_ms);
             
             if new_state != self.fsm_state {
@@ -400,7 +401,7 @@ pub struct SessionManager {
     /// Server's signing key (Ed25519)
     signing_key: ed25519_dalek::SigningKey,
     /// Default mask profile
-    default_mask: MaskProfile,
+    _default_mask: MaskProfile,
 }
 
 impl SessionManager {
@@ -416,7 +417,7 @@ impl SessionManager {
             next_ip_octet: AtomicU32::new(2),
             server_keys,
             signing_key,
-            default_mask,
+            _default_mask: default_mask,
         }
     }
     
@@ -564,6 +565,31 @@ impl SessionManager {
 
         for session_id in to_remove {
             info!("Removing stale session for IP {} after successful re-handshake", ip);
+            self.remove_session(&session_id);
+        }
+    }
+
+    /// Remove old sessions for the same VPN IP (same client) except the
+    /// specified one. Unlike `cleanup_old_sessions_for_ip`, this does NOT
+    /// affect sessions belonging to other clients behind the same NAT.
+    pub fn cleanup_old_sessions_for_vpn_ip(
+        &self,
+        vpn_ip: &Ipv4Addr,
+        keep_session_id: &[u8; 16],
+    ) {
+        let to_remove: Vec<[u8; 16]> = self.sessions.iter()
+            .filter_map(|entry| {
+                let session = entry.value().lock();
+                if session.vpn_ip == Some(*vpn_ip) && entry.key() != keep_session_id {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for session_id in to_remove {
+            info!("Removing stale session for VPN IP {} after successful re-handshake", vpn_ip);
             self.remove_session(&session_id);
         }
     }
@@ -850,19 +876,100 @@ impl SessionManager {
     }
     
     /// Update mask for a session (triggered by neural resonance compromise detection)
-    pub fn update_session_mask(&self, session_id: &[u8; 16], new_mask: MaskProfile) {
+    /// Returns the session Arc + client address if the session was found, so the
+    /// caller can send a MaskUpdate control message over the wire.
+    pub fn update_session_mask(
+        &self,
+        session_id: &[u8; 16],
+        new_mask: MaskProfile,
+    ) -> Option<(Arc<Mutex<Session>>, SocketAddr)> {
         if let Some(session) = self.sessions.get(session_id) {
-            let mut sess = session.lock();
-            info!("Session mask rotated: {} → {}", 
-                sess.mask.as_ref().map(|m| m.mask_id.as_str()).unwrap_or("default"),
-                new_mask.mask_id
-            );
-            sess.mask = Some(new_mask);
-            sess.state = SessionState::MaskChange;
-            // Reset FSM state for the new mask
-            sess.fsm_state = 0;
-            sess.fsm_packets = 0;
-            sess.fsm_state_start = Instant::now();
+            let client_addr;
+            {
+                let mut sess = session.lock();
+                info!("Session mask rotated: {} → {}", 
+                    sess.mask.as_ref().map(|m| m.mask_id.as_str()).unwrap_or("default"),
+                    new_mask.mask_id
+                );
+                sess.mask = Some(new_mask);
+                // Reset FSM state for the new mask
+                sess.fsm_state = 0;
+                sess.fsm_packets = 0;
+                sess.fsm_state_start = Instant::now();
+                // Return to Active state — MaskChange was a dead-end that froze the session
+                sess.state = SessionState::Active;
+                client_addr = sess.client_addr;
+            }
+            Some((session.clone(), client_addr))
+        } else {
+            None
         }
+    }
+
+    /// Build an encrypted MaskUpdate control packet for the given session.
+    /// Returns the raw UDP datagram bytes ready to send.
+    pub fn build_mask_update_packet(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        new_mask: &MaskProfile,
+    ) -> Result<Vec<u8>> {
+        use aivpn_common::crypto::encrypt_payload;
+
+        // Serialize mask profile → mask_data (MessagePack to match client's rmp_serde::from_slice)
+        let mask_data = rmp_serde::to_vec(new_mask)
+            .map_err(|e| Error::Session(format!("Failed to serialize mask: {}", e)))?;
+
+        // Sign mask_data with server's Ed25519 key
+        let signature = self.sign_mask(&mask_data);
+
+        // Build control payload
+        let control = ControlPayload::MaskUpdate { mask_data, signature };
+        let encoded = control.encode()?;
+
+        let mut sess = session.lock();
+        let inner_header = InnerHeader {
+            inner_type: InnerType::Control,
+            seq_num: sess.next_seq() as u16,
+        };
+        let mut inner_payload = inner_header.encode().to_vec();
+        inner_payload.extend_from_slice(&encoded);
+
+        // Encrypt (same logic as Gateway::build_packet)
+        let (nonce, counter) = sess.next_send_nonce();
+        let pad_len = 16u16;
+        let mut padded = Vec::with_capacity(2 + inner_payload.len() + pad_len as usize);
+        padded.extend_from_slice(&pad_len.to_le_bytes());
+        padded.extend_from_slice(&inner_payload);
+        {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            for _ in 0..pad_len {
+                padded.push(rng.gen::<u8>());
+            }
+        }
+
+        let ciphertext = encrypt_payload(&sess.keys.session_key, &nonce, &padded)?;
+
+        // Generate tag
+        let time_window = crypto::compute_time_window(
+            crypto::current_timestamp_ms(),
+            DEFAULT_WINDOW_MS,
+        );
+        let tag = crypto::generate_resonance_tag(
+            &sess.keys.tag_secret,
+            counter,
+            time_window,
+        );
+
+        // MDH
+        let mdh = vec![0u8; 4];
+
+        // Assemble: TAG | MDH | ciphertext
+        let mut packet = Vec::with_capacity(TAG_SIZE + mdh.len() + ciphertext.len());
+        packet.extend_from_slice(&tag);
+        packet.extend_from_slice(&mdh);
+        packet.extend_from_slice(&ciphertext);
+
+        Ok(packet)
     }
 }

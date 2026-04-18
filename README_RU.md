@@ -30,8 +30,15 @@
 | Платформа | Файл | Размер | Примечания |
 |-----------|------|--------|------------|
 | **macOS** | [aivpn-macos.dmg](releases/aivpn-macos.dmg) | ~1.8 МБ | Приложение в menu bar с интерфейсом RU/EN |
-| **Windows** | [aivpn-client.exe](releases/aivpn-client.exe) | ~6.4 МБ | Требуется [wintun.dll](https://www.wintun.net/) рядом с exe |
+| **Linux** | [aivpn-client-linux-x86_64](releases/aivpn-client-linux-x86_64) | ~4.0 МБ | Нативный x86_64 GNU/Linux CLI бинарник |
+| **Linux ARMv7** | [aivpn-client-linux-armv7-musleabihf](releases/aivpn-client-linux-armv7-musleabihf) | ~4-5 МБ | Статический musl CLI-клиент для ARMv7 серверов и SBC |
+| **Entware / MIPSel** | [aivpn-client-linux-mipsel-musl](releases/aivpn-client-linux-mipsel-musl) | ~4-5 МБ | Статический musl CLI-клиент для роутеров с Entware |
+| **Windows** | [aivpn-windows-package.zip](releases/aivpn-windows-package.zip) | ~7 МБ | Внутри `aivpn-client.exe` и `wintun.dll` |
 | **Android** | [aivpn-client.apk](releases/aivpn-client.apk) | ~6.5 МБ | Установите и вставьте ключ подключения |
+| **Linux Server** | [aivpn-server-linux-x86_64](releases/aivpn-server-linux-x86_64) | ~4.0 МБ | Готовый x86_64 GNU/Linux бинарник сервера для VPS или быстрого Docker-деплоя |
+| **Linux Server ARMv7** | [aivpn-server-linux-armv7-musleabihf](releases/aivpn-server-linux-armv7-musleabihf) | ~4-5 МБ | Статический musl бинарник сервера для ARMv7 Linux-хостов |
+| **Linux Server MIPSel** | [aivpn-server-linux-mipsel-musl](releases/aivpn-server-linux-mipsel-musl) | ~4-5 МБ | Статический musl бинарник сервера для лёгких MIPSel/Entware систем |
+
 
 ### Быстрый старт (macOS)
 1. Скачайте и откройте `aivpn-macos.dmg`
@@ -39,16 +46,33 @@
 3. Запустите — приложение появится в menu bar (без иконки в Dock)
 4. Вставьте ключ подключения (`aivpn://...`) и нажмите **Подключить**
 5. Нажмите 🇷🇺/🇬🇧 для переключения языка
-
 > ⚠️ VPN-клиенту требуются права root для создания TUN-устройства. Приложение запросит пароль через `sudo`.
 
 ### Быстрый старт (Windows)
-1. Скачайте `aivpn-client.exe` и [wintun.dll](https://www.wintun.net/)
-2. Положите оба файла в одну папку
+1. Скачайте и распакуйте [aivpn-windows-package.zip](releases/aivpn-windows-package.zip)
+2. Убедитесь, что `aivpn-client.exe` и `wintun.dll` лежат в одной папке
 3. Запустите **от имени администратора** в PowerShell:
    ```powershell
    .\aivpn-client.exe -k "ваш_ключ_подключения"
    ```
+
+### Быстрый старт (Linux)
+1. Скачайте [aivpn-client-linux-x86_64](releases/aivpn-client-linux-x86_64)
+2. Сделайте файл исполняемым и запустите от root:
+    ```bash
+    chmod +x ./aivpn-client-linux-x86_64
+    sudo ./aivpn-client-linux-x86_64 -k "ваш_ключ_подключения"
+    ```
+
+### Быстрый старт (Entware роутеры)
+1. Скачайте [aivpn-client-linux-mipsel-musl](releases/aivpn-client-linux-mipsel-musl) для MIPSel роутеров или [aivpn-client-linux-armv7-musleabihf](releases/aivpn-client-linux-armv7-musleabihf) для ARMv7 роутеров.
+2. Скопируйте бинарник на роутер, например в `/opt/bin/aivpn-client`.
+3. Сделайте файл исполняемым и запустите из Entware shell от root:
+    ```sh
+    chmod +x /opt/bin/aivpn-client
+    /opt/bin/aivpn-client -k "ваш_ключ_подключения"
+    ```
+4. Эти musl-сборки статически слинкованы, поэтому на роутере не нужен Rust toolchain и дополнительные shared libraries.
 
 ### Быстрый старт (Android)
 1. Скачайте и установите `aivpn-client.apk`
@@ -108,7 +132,41 @@ cd aivpn
 cargo build --release
 ```
 
-> На Windows убедитесь, что установлен [Wintun](https://www.wintun.net/) — скачайте `wintun.dll` и положите рядом с бинарником.
+Чтобы обновить Linux-артефакт сервера без установки Rust на хост:
+
+```bash
+./build-server-release.sh
+```
+
+Для статических musl-сборок под ARMv7 серверы и MIPSel/Entware роутеры:
+
+```bash
+./build-musl-release.sh server armv7-unknown-linux-musleabihf
+./build-musl-release.sh server mipsel-unknown-linux-musl
+./build-musl-release.sh client armv7-unknown-linux-musleabihf
+./build-musl-release.sh client mipsel-unknown-linux-musl
+```
+
+Чтобы развернуть последнюю опубликованную Linux-версию сервера на VPS одной командой:
+
+```bash
+./deploy-server-release.sh
+```
+
+> Для GitHub Releases серверным Linux-артефактом по умолчанию должен оставаться `aivpn-server-linux-x86_64`, основным Windows-артефактом — `aivpn-windows-package.zip`, а для ARM/Entware нужно прикладывать musl-артефакты `aivpn-server-linux-armv7-musleabihf`, `aivpn-server-linux-mipsel-musl`, `aivpn-client-linux-armv7-musleabihf` и `aivpn-client-linux-mipsel-musl`. Отдельный `aivpn-client.exe` безопасно выкладывать только вместе с `wintun.dll` рядом.
+
+Автоматизация GitHub Releases: workflow в `.github/workflows/server-release-asset.yml` собирает `aivpn-server-linux-x86_64`, а также ARMv7 и MIPSel musl-артефакты для сервера и клиента при публикации Release и автоматически прикладывает их к релизу.
+
+Для Docker-backed кросс-сборки без локального тулчейна используйте:
+
+```bash
+./build-musl-release.sh client armv7-unknown-linux-musleabihf
+./build-musl-release.sh client mipsel-unknown-linux-musl
+./build-musl-release.sh server armv7-unknown-linux-musleabihf
+./build-musl-release.sh server mipsel-unknown-linux-musl
+```
+
+Эти артефакты рассчитаны на ARM Linux-серверы/SBC и MIPSel-роутеры с Entware.
 
 ### 3. Сервер (только Linux)
 
@@ -117,17 +175,47 @@ cargo build --release
 Самый простой способ — всё настроено в `docker-compose.yml`.
 
 ```bash
+# Определяем Compose-команду, которая есть именно на вашей системе
+if docker compose version >/dev/null 2>&1; then
+    AIVPN_COMPOSE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    AIVPN_COMPOSE="docker-compose"
+else
+    echo "Установите Docker Compose v2 (`docker-compose-v2` или `docker-compose-plugin`) либо legacy `docker-compose`."
+    exit 1
+fi
+
 # Генерируем ключ сервера
 mkdir -p config
 openssl rand 32 > config/server.key
 chmod 600 config/server.key
 
 # Включаем NAT (нужен для доступа в интернет через VPN)
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
 sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
 
-# Собираем и запускаем
-docker compose up -d aivpn-server
+# Быстрый старт из готового Linux-бинарника
+AIVPN_SERVER_DOCKERFILE=Dockerfile.prebuilt $AIVPN_COMPOSE up -d aivpn-server
+
+# Или оставить исходный путь со сборкой из исходников
+$AIVPN_COMPOSE up -d aivpn-server
+```
+
+Быстрый путь ожидает локальный файл `releases/aivpn-server-linux-x86_64`. Его можно собрать командой `./build-server-release.sh` или скачать из Releases перед запуском Docker.
+
+Для быстрого деплоя на VPS одной командой используйте `./deploy-server-release.sh`. Скрипт скачивает релизный артефакт, создаёт `config/server.key` при необходимости, включает IPv4 forwarding, добавляет NAT-правило для интерфейса по умолчанию и запускает Docker через `Dockerfile.prebuilt`.
+
+Если у вас включён firewall, откройте `443/udp` тем инструментом, который есть в системе:
+
+```bash
+# UFW (Ubuntu/Debian)
+sudo ufw allow 443/udp
+
+# firewalld (RHEL/CentOS/Fedora)
+sudo firewall-cmd --add-port=443/udp --permanent
+sudo firewall-cmd --reload
 ```
 
 > Контейнер запускается с `network_mode: "host"` и монтирует `./config` → `/etc/aivpn` внутри контейнера.
@@ -151,8 +239,33 @@ sudo ./target/release/aivpn-server --listen 0.0.0.0:443 --key-file /etc/aivpn/se
 Включаем NAT:
 
 ```bash
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
 sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo iptables -t nat -C POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
+```
+
+Если VPN-подсеть у вас не legacy `10.0.0.0/24`, держите её в `config/server.json` как единственный авторитетный источник:
+
+```json
+{
+    "listen_addr": "0.0.0.0:443",
+    "tun_name": "aivpn0",
+    "network_config": {
+        "server_vpn_ip": "10.150.0.1",
+        "prefix_len": 24,
+        "mtu": 1346
+    }
+}
+```
+
+И NAT-правило тоже должно соответствовать этой подсети, например:
+
+```bash
+DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5; exit}')
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -C POSTROUTING -s 10.150.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE 2>/dev/null || \
+sudo iptables -t nat -A POSTROUTING -s 10.150.0.0/24 -o "$DEFAULT_IFACE" -j MASQUERADE
 ```
 
 ### 3.1 Управление клиентами
@@ -161,11 +274,14 @@ AIVPN использует модель регистрации клиентов 
 
 Вся конфигурация упаковывается в один **ключ подключения** — одну строку, которую пользователь вставляет в приложение или CLI-клиент.
 
+Теперь ключ подключения несёт не только legacy-поле VPN IP, но и необязательный блок `network_config` для начальной сетевой конфигурации. Новый клиент берёт сетевые параметры из этого блока и затем подтверждает их через `ServerHello`. Старые ключи без `network_config` продолжают работать.
+
 #### Docker
 
 ```bash
+# Используйте ту же Compose-команду, что определили выше
 # Добавить клиента (выводит ключ подключения)
-docker compose exec aivpn-server aivpn-server \
+$AIVPN_COMPOSE exec aivpn-server aivpn-server \
     --add-client "Телефон Алисы" \
     --key-file /etc/aivpn/server.key \
     --clients-db /etc/aivpn/clients.json \
@@ -178,14 +294,14 @@ docker compose exec aivpn-server aivpn-server \
 #
 # ══ Connection Key (paste into app) ══
 #
-# aivpn://eyJpIjoiMTAuMC4wLjIiLCJrIjoiLi4uIiwicCI6Ii4uLiIsInMiOiIxLjIuMy40OjQ0MyJ9
+# aivpn://eyJpIjoiMTAuMC4wLjIiLCJrIjoiLi4uIiwibiI6eyJjbGllbnRfaXAiOiIxMC4wLjAuMiIsInNlcnZlcl92cG5faXAiOiIxMC4wLjAuMSIsInByZWZpeF9sZW4iOjI0LCJtdHUiOjEzNDZ9LCJwIjoiLi4uIiwicyI6IjEuMi4zLjQ6NDQzIn0
 
 # Список всех клиентов со статистикой
 docker compose exec aivpn-server aivpn-server \
     --list-clients --clients-db /etc/aivpn/clients.json
 
 # Показать конкретного клиента (и его ключ подключения)
-docker compose exec aivpn-server aivpn-server \
+$AIVPN_COMPOSE exec aivpn-server aivpn-server \
     --show-client "Телефон Алисы" \
     --key-file /etc/aivpn/server.key \
     --clients-db /etc/aivpn/clients.json \
@@ -269,6 +385,14 @@ docker compose -f docker-compose.admin.yml up -d --build
 sudo ./target/release/aivpn-client -k "aivpn://eyJp..."
 ```
 
+Приоритет у новых клиентов такой:
+
+1. Сетевые параметры, подтверждённые сервером в `ServerHello`
+2. Bootstrap `network_config` из ключа подключения
+3. Legacy fallback `10.0.0.0/24`
+
+Важно для миграции: старые клиенты продолжают работать со старыми ключами и legacy `/24`, но если вы переносите сервер в другую подсеть или меняете префикс, клиентов нужно обновить, а ключи подключения лучше перевыпустить.
+
 Полный туннель:
 
 ```bash
@@ -310,7 +434,9 @@ sudo ./target/release/aivpn-client \
 
 #### Windows
 
-Скачайте и положите `wintun.dll` (от [WireGuard/wintun](https://www.wintun.net/)) рядом с `.exe`:
+Для пользователей предпочтительно скачивать и распаковывать `releases/aivpn-windows-package.zip`.
+
+Если выкладываете файлы по отдельности, `wintun.dll` (от [WireGuard/wintun](https://www.wintun.net/)) должен лежать рядом с `.exe`:
 
 ```
 aivpn-client.exe
@@ -352,6 +478,19 @@ cargo build --release --target x86_64-unknown-linux-gnu
 rustup target add x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 ```
+
+Для статических musl-кросс-сборок без локального тулчейна используйте Docker-backed release builds:
+
+```bash
+./build-musl-release.sh client armv7-unknown-linux-musleabihf
+./build-musl-release.sh client mipsel-unknown-linux-musl
+./build-musl-release.sh server armv7-unknown-linux-musleabihf
+./build-musl-release.sh server mipsel-unknown-linux-musl
+```
+
+Эти артефакты рассчитаны на ARM Linux-серверы/SBC и MIPSel-роутеры с Entware.
+
+Для Entware-роутеров обычный поток такой: собрать или скачать musl-артефакт, скопировать его в `/opt/bin`, выдать `chmod +x` и запускать прямо из shell роутера.
 
 ## Структура проекта
 

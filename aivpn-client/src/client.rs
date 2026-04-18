@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use portable_atomic::AtomicU64;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -28,6 +29,7 @@ use aivpn_common::protocol::{
 };
 use aivpn_common::mask::MaskProfile;
 use aivpn_common::error::{Error, Result};
+use aivpn_common::network_config::ClientNetworkConfig;
 use aivpn_common::upload_pipeline::{self, PacketEncryptor, UploadConfig};
 
 use crate::mimicry::MimicryEngine;
@@ -76,15 +78,15 @@ pub struct AivpnClient {
     keypair: KeyPair,
     counter: u64,
     send_seq: u32,
-    recv_seq: u32,
+    _recv_seq: u32,
     recv_window: RecvWindow,
     transition_recv_window: RecvWindow,
     // Traffic counters
-    bytes_sent: Arc<std::sync::atomic::AtomicU64>,
-    bytes_received: Arc<std::sync::atomic::AtomicU64>,
+    bytes_sent: Arc<AtomicU64>,
+    bytes_received: Arc<AtomicU64>,
     // Pre-allocated buffers for zero-copy I/O (OPTIMIZATION)
-    send_buf: Vec<u8>,
-    recv_buf: Vec<u8>,
+    _send_buf: Vec<u8>,
+    _recv_buf: Vec<u8>,
 }
 
 impl AivpnClient {
@@ -92,8 +94,8 @@ impl AivpnClient {
     pub fn new(config: ClientConfig) -> Result<Self> {
         let keypair = KeyPair::generate();
         let tunnel = Tunnel::new(config.tun_config.clone());
-        let bytes_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let bytes_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let bytes_sent = Arc::new(AtomicU64::new(0));
+        let bytes_received = Arc::new(AtomicU64::new(0));
 
         Ok(Self {
             config,
@@ -108,14 +110,14 @@ impl AivpnClient {
             keypair,
             counter: 0,
             send_seq: 0,
-            recv_seq: 0,
+            _recv_seq: 0,
             recv_window: RecvWindow::new(),
             transition_recv_window: RecvWindow::new(),
             bytes_sent: bytes_sent.clone(),
             bytes_received: bytes_received.clone(),
             // Pre-allocate buffers to MAX_PACKET_SIZE to avoid reallocations
-            send_buf: Vec::with_capacity(MAX_PACKET_SIZE),
-            recv_buf: Vec::with_capacity(MAX_PACKET_SIZE),
+            _send_buf: Vec::with_capacity(MAX_PACKET_SIZE),
+            _recv_buf: Vec::with_capacity(MAX_PACKET_SIZE),
         })
     }
     
@@ -132,12 +134,6 @@ impl AivpnClient {
             .map_err(|e: std::net::AddrParseError| Error::Io(
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
             ))?;
-        self.tunnel.set_server_ip(server_addr.ip().to_string());
-        
-        // Enable full tunnel if configured
-        if self.config.tun_config.full_tunnel {
-            self.tunnel.enable_full_tunnel()?;
-        }
         
         // Create UDP socket with 4MB OS buffers (OPTIMIZATION)
         let domain = if server_addr.is_ipv4() { socket2::Domain::IPV4 } else { socket2::Domain::IPV6 };
@@ -162,6 +158,13 @@ impl AivpnClient {
         let socket = UdpSocket::from_std(std_sock).map_err(Error::Io)?;
         
         self.udp_socket = Some(Arc::new(socket));
+
+        self.tunnel.set_server_ip(server_addr.ip().to_string());
+        
+        // Enable full tunnel only after the server UDP path is established.
+        if self.config.tun_config.full_tunnel {
+            self.tunnel.enable_full_tunnel()?;
+        }
         
         // Initialize mimicry engine
         self.mimicry_engine = Some(MimicryEngine::new(self.config.initial_mask.clone()));
@@ -178,6 +181,27 @@ impl AivpnClient {
         info!("Connected to server at {}", self.config.server_addr);
         info!("TUN device: {}", self.tunnel.name());
         
+        Ok(())
+    }
+
+    fn apply_server_network_override(&mut self, network_config: ClientNetworkConfig) -> Result<()> {
+        let current_config = self.config.tun_config.client_network_config()?;
+        if current_config == network_config {
+            return Ok(());
+        }
+
+        info!(
+            "Applying server-confirmed network override: client {} gateway {} /{} mtu {}",
+            network_config.client_ip,
+            network_config.server_vpn_ip,
+            network_config.prefix_len,
+            network_config.mtu,
+        );
+
+        let tun_name = self.config.tun_config.tun_name.clone();
+        let full_tunnel = self.config.tun_config.full_tunnel;
+        self.tunnel.apply_network_config(network_config)?;
+        self.config.tun_config = TunnelConfig::from_network_config(tun_name, network_config, full_tunnel);
         Ok(())
     }
     
@@ -304,8 +328,8 @@ impl AivpnClient {
                 if stats_shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                let sent = stats_bytes_sent.load(std::sync::atomic::Ordering::Relaxed);
-                let received = stats_bytes_received.load(std::sync::atomic::Ordering::Relaxed);
+                let sent = stats_bytes_sent.load(Ordering::Relaxed);
+                let received = stats_bytes_received.load(Ordering::Relaxed);
                 let stats = format!("sent:{},received:{}", sent, received);
                 let _ = tokio::fs::write("/var/run/aivpn/traffic.stats", &stats).await;
                 let _ = tokio::fs::write("/tmp/aivpn-traffic.stats", &stats).await;
@@ -402,13 +426,13 @@ impl AivpnClient {
         udp: Arc<UdpSocket>,
         engine: MimicryEngine,
         upload_state: Arc<Mutex<UploadCryptoState>>,
-        bytes_sent: Arc<std::sync::atomic::AtomicU64>,
+        bytes_sent: Arc<AtomicU64>,
     ) -> Result<()> {
         /// Wraps MimicryEngine to implement the shared PacketEncryptor trait.
         struct MimicryEncryptor {
             engine: MimicryEngine,
             upload_state: Arc<Mutex<UploadCryptoState>>,
-            bytes_sent: Arc<std::sync::atomic::AtomicU64>,
+            bytes_sent: Arc<AtomicU64>,
         }
 
         impl PacketEncryptor for MimicryEncryptor {
@@ -432,7 +456,7 @@ impl AivpnClient {
             }
 
             fn on_data_sent(&mut self, payload_len: usize) {
-                self.bytes_sent.fetch_add(payload_len as u64, std::sync::atomic::Ordering::Relaxed);
+                self.bytes_sent.fetch_add(payload_len as u64, Ordering::Relaxed);
             }
         }
 
@@ -484,7 +508,7 @@ impl AivpnClient {
                     return Err(Error::InvalidPacket("Invalid IP version in payload"));
                 }
                 self.tunnel.write_packet_async(&ip_payload).await?;
-                self.bytes_received.fetch_add(ip_payload.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                self.bytes_received.fetch_add(ip_payload.len() as u64, Ordering::Relaxed);
                 debug!("Received {} bytes from server, wrote to TUN", ip_payload.len());
             }
             InnerType::Control => {
@@ -511,8 +535,12 @@ impl AivpnClient {
             ControlPayload::KeyRotate { new_eph_pub: _ } => {
                 debug!("Key rotation signal received");
             }
-            ControlPayload::ServerHello { server_eph_pub, signature } => {
+            ControlPayload::ServerHello { server_eph_pub, signature, network_config } => {
                 info!("ServerHello received — completing PFS ratchet");
+
+                if let Some(network_config) = network_config {
+                    self.apply_server_network_override(network_config)?;
+                }
                 
                 // Verify Ed25519 signature if server signing key configured (HIGH-6)
                 if let Some(signing_pub) = &self.config.server_signing_pub {
@@ -670,11 +698,11 @@ impl AivpnClient {
 
     /// Get traffic statistics
     pub fn bytes_sent(&self) -> u64 {
-        self.bytes_sent.load(std::sync::atomic::Ordering::Relaxed)
+        self.bytes_sent.load(Ordering::Relaxed)
     }
 
     pub fn bytes_received(&self) -> u64 {
-        self.bytes_received.load(std::sync::atomic::Ordering::Relaxed)
+        self.bytes_received.load(Ordering::Relaxed)
     }
 }
 
