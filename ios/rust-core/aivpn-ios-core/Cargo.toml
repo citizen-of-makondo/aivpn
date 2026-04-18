@@ -6,7 +6,7 @@ license = "MIT"
 
 [lib]
 name = "aivpn_ios_core"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 aivpn-common = { path = "../../../aivpn-common" }

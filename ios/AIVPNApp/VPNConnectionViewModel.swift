@@ -42,12 +42,20 @@ protocol VPNController {
 
 actor NETunnelVPNController: VPNController {
     private static let tunnelBundleIdentifier = "com.aivpn.ios.tunnel"
+    private static let loadRetryBackoffSeconds: TimeInterval = 15
 
     private var manager: NETunnelProviderManager?
+    private var nextStatusReloadAllowedAt: Date = .distantPast
 
     func start(connectionKey: String) async throws {
         let parsed = try AIVPNConnectionKey.parse(connectionKey)
-        let manager = try await loadOrCreateManager()
+        let manager: NETunnelProviderManager
+        do {
+            manager = try await loadOrCreateManager()
+            nextStatusReloadAllowedAt = .distantPast
+        } catch {
+            throw mapConfigurationError(error)
+        }
 
         let provider = NETunnelProviderProtocol()
         provider.providerBundleIdentifier = Self.tunnelBundleIdentifier
@@ -85,9 +93,28 @@ actor NETunnelVPNController: VPNController {
 
     func status() async -> NEVPNStatus {
         if manager == nil {
-            _ = try? await loadOrCreateManager()
+            let now = Date()
+            guard now >= nextStatusReloadAllowedAt else {
+                return .disconnected
+            }
+
+            do {
+                _ = try await loadOrCreateManager()
+                nextStatusReloadAllowedAt = .distantPast
+            } catch {
+                nextStatusReloadAllowedAt = now.addingTimeInterval(Self.loadRetryBackoffSeconds)
+                return .disconnected
+            }
         }
         return manager?.connection.status ?? .disconnected
+    }
+
+    private func mapConfigurationError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == "NEConfigurationErrorDomain", nsError.code == 10 {
+            return VPNControllerError.permissionDenied
+        }
+        return error
     }
 
     private func loadOrCreateManager() async throws -> NETunnelProviderManager {
@@ -136,6 +163,17 @@ actor NETunnelVPNController: VPNController {
                     continuation.resume(returning: ())
                 }
             }
+        }
+    }
+}
+
+enum VPNControllerError: LocalizedError {
+    case permissionDenied
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "VPN permission denied. Check Network Extension capability and signing profile."
         }
     }
 }
@@ -219,8 +257,9 @@ final class VPNConnectionViewModel: ObservableObject {
                 appendEvent("Tunnel start requested")
             } catch {
                 status = .disconnected
-                lastError = error.localizedDescription
-                appendEvent("Connect failed: \(error.localizedDescription)")
+                let message = formatError(error)
+                lastError = message
+                appendEvent("Connect failed: \(message)")
             }
         }
     }
@@ -283,6 +322,19 @@ final class VPNConnectionViewModel: ObservableObject {
     private func refreshStatus() async {
         let systemStatus = await controller.status()
         self.status = mapStatus(systemStatus)
+    }
+
+    private func formatError(_ error: Error) -> String {
+        if let controllerError = error as? VPNControllerError {
+            return controllerError.localizedDescription
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == "NEConfigurationErrorDomain", nsError.code == 10 {
+            return "VPN permission denied. Check Network Extension capability and signing profile."
+        }
+
+        return error.localizedDescription
     }
 
     @discardableResult
